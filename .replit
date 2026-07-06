@@ -1,14 +1,14 @@
-modules = ["nodejs-20", "web", "python-3.11", "postgresql-16"]
+modules = ["nodejs-20", "web"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
-channel = "stable-24_05"
+channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "autoscale"
 build = ["npm", "run", "build"]
-run = ["npm", "run", "start"]
+run = ["node", "./dist/index.cjs"]
 
 [[ports]]
 localPort = 5000
@@ -40,6 +40,7 @@ waitForPort = 5000
 
 [agent]
 integrations = ["javascript_log_in_with_replit:1.0.0", "javascript_stripe:1.0.0", "javascript_object_storage:2.0.0", "javascript_openrouter_ai_integrations:2.0.0", "javascript_openai_ai_integrations:2.0.0"]
+stack = "FULLSTACK_JS"
 
 [objectStorage]
 defaultBucketID = "replit-objstore-50aec329-45e4-4d29-9714-7bfab7b3304c"
@@ -47,3 +48,5 @@ defaultBucketID = "replit-objstore-50aec329-45e4-4d29-9714-7bfab7b3304c"
 [userenv]
 
 [userenv.shared]
+ENCRYPTION_KEY = "bf822bc26057772534d975b300b02ed7e77717cff47dc19fa523dc698b1019d5"
+APP_DOMAINS = "72bbe586-9bec-4142-8c99-fa9296ea5556-00-1zf6ihnub0nb2.janeway.replit.dev"
