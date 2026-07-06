@@ -1,0 +1,790 @@
+import type { Express } from "express";
+import { logger } from "../logger";
+import { requireAdmin } from "../middleware";
+import { getVapidPublicKey, saveSubscription, removeSubscription, sendPushToUser, pushEnabled } from "../push";
+import { randomUUID } from "crypto";
+import { createServer, type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
+import { storage } from "../storage";
+import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseObjectPath } from "../objectStorage";
+import { civitaiService, CivitAIService } from "../civitai-service";
+import { diffusService, DiffusService } from "../diffus-service";
+import { recoveryService } from '../recovery-service';
+import { GeminiService, type AIPromptRequest } from "../gemini-service";
+import { generateSceneTitleAndDescription } from "../gemini";
+import { ErrorLogger } from "../error-logger";
+import { insertGenerationSchema, insertFavoriteSchema, insertModelLikeSchema, insertCharacterSchema, insertQualityGroupSchema, insertSavedSceneSchema, insertSavedPromptSchema, insertSignupPromotionSchema, insertCreditPackageSchema, insertCreditTransactionSchema, insertEventSchema, insertEventStepSchema, insertFavoritePromptWordSchema, transformRequestSchema, generations, models } from "@shared/schema";
+import { civitaiOrchestration } from "../civitai-orchestration";
+import { db } from "../db";
+import type { User, Generation } from "@shared/schema";
+import Stripe from "stripe";
+import { ZodError, z } from "zod";
+import { setupAuth, isAuthenticated } from "../googleAuth";
+import multer from "multer";
+import Replicate from "replicate";
+import { responseCache, CACHE_TTL, createCacheKey } from "../cache";
+import { getCleanupStats, runImageCleanup, RETENTION_POLICY } from "../image-cleanup-service";
+import OpenAI from "openai";
+import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
+
+import { type RouteContext, eq, and } from "./context";
+
+export function registerSceneDataRoutes(app: Express, ctx: RouteContext) {
+  // Scene Data CSV Download - Return existing static data
+  app.get("/api/scene-data/download/:category", async (req, res) => {
+    try {
+      const { category } = req.params;
+      logger.info(`📥 CSV download requested for category: ${category}`);
+      
+      let dataToExport: any[] = [];
+      
+      logger.info(`📊 Starting data processing for category: ${category}`);
+      
+      // Define the scene data directly here since import is causing issues
+      const staticSceneData = {
+        theMallRetailLocations: [
+          { name: "Shopping Mall", description: "busy shopping mall with storefronts" },
+          { name: "Boutique Store", description: "upscale boutique clothing store" },
+          { name: "Department Store", description: "large department store" },
+          { name: "Fitting Room", description: "private fitting room" },
+          { name: "Store Window", description: "storefront window display" }
+        ],
+        homeIndoorSpacesLocations: [
+          { name: "Living Room", description: "cozy living room with sofa" },
+          { name: "Bedroom", description: "comfortable bedroom" },
+          { name: "Kitchen", description: "modern kitchen" },
+          { name: "Bathroom", description: "luxury bathroom" },
+          { name: "Home Office", description: "stylish home office" }
+        ],
+        natureParksLocations: [
+          { name: "Forest Trail", description: "secluded forest trail" },
+          { name: "Park Bench", description: "peaceful park bench" },
+          { name: "Garden Path", description: "beautiful garden pathway" },
+          { name: "Mountain View", description: "scenic mountain overlook" },
+          { name: "Hiking Trail", description: "mountain hiking trail" }
+        ],
+        schoolCampusLocations: [
+          { name: "Classroom", description: "university classroom" },
+          { name: "Library", description: "quiet campus library" },
+          { name: "Dormitory", description: "college dormitory room" },
+          { name: "Campus Quad", description: "open campus quadrangle" },
+          { name: "Study Hall", description: "student study hall" }
+        ],
+        sportsRecreationLocations: [
+          { name: "Gym", description: "modern fitness gym" },
+          { name: "Tennis Court", description: "outdoor tennis court" },
+          { name: "Swimming Pool", description: "Olympic swimming pool" },
+          { name: "Yoga Studio", description: "peaceful yoga studio" },
+          { name: "Sports Field", description: "outdoor sports field" }
+        ],
+        urbanCityLifeLocations: [
+          { name: "City Street", description: "busy city street" },
+          { name: "Rooftop", description: "urban rooftop terrace" },
+          { name: "Coffee Shop", description: "trendy urban coffee shop" },
+          { name: "Subway Station", description: "underground subway platform" },
+          { name: "High-rise Building", description: "modern high-rise building" }
+        ],
+        waterActivitiesBeachesLocations: [
+          { name: "Sandy Beach", description: "sandy beach with crystal clear water" },
+          { name: "Ocean Waves", description: "ocean waves crashing on shore" },
+          { name: "Pool Deck", description: "luxury pool deck with lounge chairs" },
+          { name: "Beach Resort", description: "tropical beach resort" },
+          { name: "Boat Deck", description: "luxury yacht deck" }
+        ],
+        workCareerLocations: [
+          { name: "Corporate Office", description: "modern corporate office" },
+          { name: "Conference Room", description: "executive conference room" },
+          { name: "Reception Area", description: "professional reception area" },
+          { name: "Business Meeting", description: "formal business meeting room" },
+          { name: "Executive Suite", description: "luxury executive office" }
+        ],
+        fantasyCreativeLocations: [
+          { name: "Mystical Forest", description: "enchanted mystical forest" },
+          { name: "Castle Chamber", description: "medieval castle chamber" },
+          { name: "Fairy Garden", description: "magical fairy garden" },
+          { name: "Fantasy Realm", description: "otherworldly fantasy realm" },
+          { name: "Magical Studio", description: "artistic magical studio" }
+        ],
+        theMallRetailOutfits: [
+          { name: "Mall Chic (Shorts)", description: "tight light gray crop top, high-waisted baggy gray cargo shorts" },
+          { name: "Shopping Spree (Dress)", description: "short floral-print sundress, tie-front detail, light blue base, white and yellow flowers, large canvas tote bag" },
+          { name: "Cosmetics Cruise (Shorts)", description: "fitted off-the-shoulder black shirt, tight black spandex biker shorts" },
+          { name: "Boba Run (Dress)", description: "short white linen mini-dress" },
+          { name: "Shopping Haul (Shorts)", description: "solid light gray ribbed crop top, high-waisted baggy khaki shorts" },
+          { name: "Grocery Grab (Leggings)", description: "tight light gray shirt, high-waisted tight black leggings" },
+          { name: "Checkout Chill (Shorts)", description: "loose-fitting oversized heather gray t-shirt tied at the waist, baggy black cotton athletic shorts" },
+          { name: "Market Midi (Dress)", description: "short sage green sundress, tie-front detail" },
+          { name: "Aisle Stroll (Shorts)", description: "fitted off-the-shoulder navy blue shirt, tight navy blue athletic shorts" },
+          { name: "Label Look (Dress)", description: "short yellow-and-white striped linen mini-dress" },
+          { name: "Perfume Prep (Shorts)", description: "light pink crop top, delicate lace trim, high-waisted tight white shorts" },
+          { name: "Hat Head (Dress)", description: "short white-and-red polka dot sundress, tie-front detail" },
+          { name: "Shoe Shop (Shorts)", description: "loose-fitting oversized light blue t-shirt tied at the waist, soft baggy khaki athletic shorts" },
+          { name: "Waiting Game (Dress)", description: "short black-and-white checkered mini-dress" }
+        ],
+        homeIndoorSpacesOutfits: [
+          { name: "Cozy Gamer (Shorts)", description: "loose-fitting oversized heather gray t-shirt tied at the waist, soft baggy black cotton athletic shorts" },
+          { name: "Movie Marathon (Dress)", description: "short burgundy jersey-knit dress, side cutouts, cozy cream-colored knit blanket" },
+          { name: "Gaming Gear (Shorts)", description: "loose-fitting oversized black t-shirt tied at the waist, soft baggy green athletic shorts" },
+          { name: "Bookworm Best (Dress)", description: "short royal blue jersey-knit dress, side cutouts, cream-colored blanket" },
+          { name: "Pet Pal (Shorts)", description: "loose-fitting oversized pastel yellow t-shirt tied at the waist, soft baggy gray cotton shorts" },
+          { name: "Morning Stretch (Shorts)", description: "tight athletic navy blue crop top, high-waisted tight navy blue spandex shorts" },
+          { name: "Journal Jumper (Dress)", description: "short light purple jersey-knit dress, cozy white cardigan" },
+          { name: "Work Wear (Leggings)", description: "casual button-down light gray shirt tied at the front, tight high-waisted black leggings" },
+          { name: "Puzzle Player (Dress)", description: "short light pink jersey-knit dress, side cutouts, white sweatshirt tied around waist" },
+          { name: "Mani Moment (Shorts)", description: "loose-fitting oversized light green t-shirt tied at the waist, soft baggy white athletic shorts" },
+          { name: "Outfit Tester (Shorts)", description: "tight athletic black crop top, high-waisted tight black spandex shorts" },
+          { name: "TikTok Tunic (Dress)", description: "short hot pink jersey-knit dress" },
+          { name: "Window Wonder (Shorts)", description: "loose-fitting oversized oatmeal-colored t-shirt tied at the waist, soft baggy gray athletic shorts" },
+          { name: "Kitchen Kween (Leggings)", description: "tight light gray shirt, high-waisted tight black leggings" },
+          { name: "Laundry Lounger (Dress)", description: "short olive green jersey-knit dress, white scrunchie" },
+          { name: "Plant Parent (Shorts)", description: "loose-fitting oversized brown t-shirt tied at the waist, soft baggy beige cotton shorts" },
+          { name: "Closet Cleanse (Shorts)", description: "tight light gray crop top, high-waisted tight black spandex shorts" }
+        ],
+        natureParksOutfits: [
+          { name: "Garden Glam (Shorts)", description: "loose-fitting oversized green t-shirt tied at the waist, soft baggy khaki athletic shorts, gardening gloves" },
+          { name: "Hiking Trail Blazer (Shorts)", description: "moisture-wicking forest green crop top, cargo-style baggy khaki shorts" },
+          { name: "Rock Climber (Shorts)", description: "tight-fitting black ribbed crop top, high-waisted baggy camouflage cargo shorts" },
+          { name: "Dune Duster (Bikini)", description: "sporty royal blue bikini, high-neck crop top, matching high-cut bottoms, large straw sun hat" },
+          { name: "Picnic Perfect (Dress)", description: "short flowy white dress, smocked bodice, wide-brimmed straw hat" },
+          { name: "Hillside Hues (Shorts)", description: "tight light gray crop top, high-waisted tight black spandex shorts" },
+          { name: "Bench Beauty (Dress)", description: "short flowy light purple dress, smocked bodice, white cardigan" },
+          { name: "Park Pal (Shorts)", description: "loose-fitting oversized light yellow t-shirt tied at the waist, soft baggy khaki athletic shorts" },
+          { name: "Phone Flow (Dress)", description: "short flowy light blue dress, smocked bodice, brown leather crossbody bag" },
+          { name: "Flower Child (Shorts)", description: "tight light gray crop top, delicate floral print, high-waisted tight green spandex shorts" },
+          { name: "Campfire Cozy (Shorts)", description: "loose-fitting oversized dark green t-shirt tied at the waist, soft baggy brown cotton athletic shorts" },
+          { name: "Park Stroll (Skirt)", description: "short black denim mini-skirt, small cutout mid-section, simple white t-shirt" },
+          { name: "Leaf Leaper (Dress)", description: "short flowy orange dress, smocked bodice" },
+          { name: "Swing Style (Dress)", description: "short flowy light green dress, smocked bodice" },
+          { name: "Bend Back (Shorts)", description: "tight-fitting hot pink crop top, high-waisted tight black spandex shorts" },
+          { name: "Bench Strut (Shorts)", description: "loose-fitting oversized brown t-shirt tied at the waist, soft baggy white cotton shorts" },
+          { name: "Laundry Day (Dress)", description: "short flowy sky blue dress, smocked bodice" },
+          { name: "Mountain Muse (Shorts)", description: "tight light gray crop top, high-waisted tight black spandex shorts" },
+          { name: "Lean In (Shorts)", description: "loose-fitting oversized black t-shirt tied at the waist, baggy khaki cargo shorts" },
+          { name: "Windy Wanderer (Dress)", description: "short flowy navy blue dress, smocked bodice" }
+        ],
+        schoolCampusOutfits: [
+          { name: "Locker Look (Shorts)", description: "tight-fitting ribbed light gray crop top, high-waisted baggy distressed denim shorts" },
+          { name: "Campus Cutie (Dress)", description: "short red and black plaid tennis dress, small cutout mid-section" },
+          { name: "Cafeteria Casual (Shorts)", description: "loose-fitting oversized light gray t-shirt tied at the waist, soft baggy khaki shorts" },
+          { name: "Stair Style (Dress)", description: "short burgundy plaid tennis dress, small cutout mid-sections" },
+          { name: "Locker Lounger (Bikini)", description: "sporty bright pink bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Hallway Hottie (Shorts)", description: "tight light gray crop top, high-waisted tight khaki shorts" },
+          { name: "Vending Vibes (Shorts)", description: "loose-fitting oversized light green t-shirt tied at the waist, soft baggy navy blue athletic shorts" },
+          { name: "Common Room Cozy (Dress)", description: "short light blue plaid tennis dress, small cutout mid-section" },
+          { name: "Lab Ready (Leggings)", description: "simple black crop top, long light gray lab coat, tight black leggings" },
+          { name: "Library Lean (Shorts)", description: "loose-fitting oversized brown t-shirt tied at the waist, soft baggy black cotton shorts" },
+          { name: "Lecture Leggings (Dress)", description: "short dark purple plaid tennis dress, small cutout mid-section" },
+          { name: "Quad Quiet (Leggings)", description: "tight light gray crop top, high-waisted tight black leggings" },
+          { name: "Bulletin Babe (Shorts)", description: "tight light gray shirt, soft baggy gray cotton shorts" },
+          { name: "Bleacher Babe (Dress)", description: "short red plaid tennis dress, small cutout mid-section" }
+        ],
+        sportsRecreationOutfits: [
+          { name: "Gym Glam (Shorts)", description: "tight athletic hot pink crop top, high-waisted tight black yoga shorts" },
+          { name: "Stretch Star (Shorts)", description: "tight athletic black crop top, high-waisted tight gray yoga shorts" },
+          { name: "Dance Moves (Shorts)", description: "tight light gray crop top, high-waisted tight black yoga shorts" },
+          { name: "Yoga Yogi (Shorts)", description: "tight athletic light blue crop top, high-waisted tight white yoga shorts" },
+          { name: "High Kicker (Shorts)", description: "tight athletic red crop top, high-waisted tight black athletic shorts" },
+          { name: "Baseball Babe (Shorts)", description: "loose-fitting oversized light gray t-shirt tied at the waist, soft baggy gray athletic shorts" },
+          { name: "Baller Babe (Shorts)", description: "tight athletic purple crop top, high-waisted tight black athletic shorts" },
+          { name: "Tennis Star (Dress)", description: "short pleated white tennis dress, built-in sports bra, lime green trim" },
+          { name: "Skate Park Vibe (Shorts)", description: "oversized band t-shirt cropped at the mid-section, baggy khaki shorts" },
+          { name: "Skate Fail (Shorts)", description: "oversized black t-shirt cropped at the mid-section, baggy camouflage cargo shorts" },
+          { name: "Bike Babe (Dress)", description: "short black athletic dress, cut-out mid-section" },
+          { name: "Ice Skater (Leggings)", description: "tight athletic burgundy crop top, high-waisted tight black spandex leggings" },
+          { name: "Grass Stretch (Shorts)", description: "tight athletic yellow crop top, high-waisted tight black spandex shorts" },
+          { name: "Quad Stretch (Shorts)", description: "tight athletic black crop top, high-waisted tight purple spandex shorts" },
+          { name: "Hamstring Stretch (Shorts)", description: "tight athletic navy blue crop top, high-waisted tight black spandex shorts" },
+          { name: "Starting Line (Shorts)", description: "tight athletic red crop top, high-waisted tight black athletic shorts" },
+          { name: "Baton Beauty (Shorts)", description: "tight athletic light gray crop top, high-waisted tight black athletic shorts" },
+          { name: "Finish First (Shorts)", description: "tight light gray crop top, high-waisted tight black athletic shorts" },
+          { name: "Hurdle Hottie (Dress)", description: "short pleated white tennis dress, built-in sports bra" },
+          { name: "High Jump Star (Shorts)", description: "tight athletic black crop top, high-waisted tight black spandex shorts" },
+          { name: "Long Jumper (Shorts)", description: "tight athletic red crop top, high-waisted tight black athletic shortss" },
+          { name: "Pole Vaulter (Dress)", description: "short black athletic dress, cut-out mid-section" },
+          { name: "Trail Runner (Leggings)", description: "tight athletic red crop top, high-waisted tight black leggings" },
+          { name: "Hill Climber (Leggings)", description: "tight athletic black crop top, high-waisted tight black leggingss" },
+          { name: "Creek Crossing (Shorts)", description: "loose-fitting oversized light gray t-shirt tied at the waist, baggy green cargo shorts" },
+          { name: "Focused Runner (Leggings)", description: "tight athletic light gray crop top, high-waisted tight black leggings" },
+          { name: "Water Break (Leggings)", description: "tight athletic blue crop top, high-waisted tight black leggings" },
+          { name: "Cool Down (Leggings)", description: "tight light gray crop top, sports bra underneath, high-waisted tight black leggings" },
+          { name: "Discus Doll (Dress)", description: "short pleated black tennis dress, built-in sports bra" },
+          { name: "Shot Put Star (Shorts)", description: "tight athletic red crop top, high-waisted tight black athletic shorts" }
+        ],
+        urbanCityLifeOutfits: [
+          { name: "Airport Attire (Leggings)", description: "tight black crop top, high-waisted tight black leggings" },
+          { name: "Gas Station Glam (Shorts)", description: "oversized black band t-shirt cropped at the mid-section, baggy green cargo shorts" },
+          { name: "Airport Attire (Dress)", description: "short black-and-white checkered mini-dress, cut-out mid-section, rolling suitcase" },
+          { name: "Bus Stop Babe (Leggings)", description: "tight light gray crop top, high-waisted tight black leggings" },
+          { name: "Laundromat Lounger (Dress)", description: "short light blue linen mini-dress, cut-out mid-section" },
+          { name: "Laundromat Load (Shorts)", description: "loose-fitting oversized light gray t-shirt tied at the waist, baggy gray cotton shorts" },
+          { name: "Laundry Wait (Leggings)", description: "tight-fitting pink crop top, high-waisted tight black leggings" },
+          { name: "Dryer Daze (Dress)", description: "short white linen mini-dress, cut-out mid-section" },
+          { name: "Balcony Babe (Dress)", description: "short silky light blue slip dress, cut-out mid-section, delicate silver jewelry" },
+          { name: "Bus Stop Style (Leggings)", description: "tight-fitting red crop top, high-waisted tight black leggings" },
+          { name: "Cafe Cutie (Dress)", description: "short silky dark green slip dress, cut-out mid-section, gold necklace" },
+          { name: "Concert Queen (Leggings)", description: "tight light gray shirt, high-waisted tight black leggings" },
+          { name: "Festival Babe (Dress)", description: "short silky purple slip dress, cut-out mid-section, colorful costume headpiece" },
+          { name: "Park Stroll (Skirt)", description: "short black denim mini-skirt, small cutout mid-section, simple light gray t-shirt" },
+          { name: "Street Style (Dress)", description: "short silky silver slip dress, cut-out mid-section" },
+          { name: "Subway Style (Leggings)", description: "tight light gray crop top, high-waisted tight black leggings" },
+          { name: "Waiting Wanderer (Dress)", description: "short silky gold slip dress, cut-out mid-section" },
+          { name: "Wall Sitter (Shorts)", description: "tight-fitting black crop top, high-waisted tight khaki shorts" },
+          { name: "Windy Wanderer (Dress)", description: "short silky red slip dress, cut-out mid-section, white sandals" }
+        ],
+        waterActivitiesBeachesOutfits: [
+          { name: "Lounging at Pool Sunbathing (Bikini)", description: "vibrant floral high-waisted bikini, sheer light gray cotton cover-up shirt tied at the front" },
+          { name: "Sunscreen Sundress (Dress)", description: "sporty orange bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Waterpark Splash (Bikini)", description: "sporty bright pink bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Pool Splash (Bikini)", description: "sporty solid light gray bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Waterslide Warrior (Bikini)", description: "sporty black bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Lazy River Lounger (Bikini)", description: "sporty solid yellow bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Rope Net (Bikini)", description: "sporty solid red bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Water Bucket (Bikini)", description: "sporty solid purple bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Tube Time (Bikini)", description: "sporty light green bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Waterslide Wait (Bikini)", description: "sporty light blue bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Wet Run (Bikini)", description: "sporty solid yellow bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Towel Tangle (Bikini)", description: "sporty bright pink bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Towel Dry (Bikini)", description: "sporty solid light gray bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Dive Prep (Bikini)", description: "sporty black bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Pool Selfie (Bikini)", description: "sporty solid red bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Poolside Snack (Bikini)", description: "sporty solid purple bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Concession Stand (Bikini)", description: "sporty light green bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "River Crossing (Bikini)", description: "sporty light blue bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Canoe Paddler (Shorts)", description: "tight light gray shirt, high-waisted tight navy blue shorts" },
+          { name: "Pier Pro (Shorts)", description: "loose-fitting oversized light gray t-shirt tied at the waist, soft baggy khaki shorts" },
+          { name: "Beach Baller (Bikini)", description: "sporty bright pink bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Sandcastle Queen (Bikini)", description: "sporty solid light gray bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Shoreline Sitter (Bikini)", description: "sporty black bikini, high-neck crop top, matching high-cut bottoms" },
+          { name: "Wave Jumper (Bikini)", description: "sporty solid red bikini, high-neck crop top, matching high-cut bottoms" }
+        ],
+        workCareerOutfits: [
+          { name: "Professional Pro (Trousers)", description: "sleek black crop top, tailored tan linen blazer, tight high-waisted black trousers" },
+          { name: "Office Casual (Trousers)", description: "tight light gray crop top, high-waisted baggy black trousers" },
+          { name: "Meeting Maven (Dress)", description: "short emerald green form-fitting dress, thin beige cardigan" },
+          { name: "Site Style (Pants)", description: "tight light gray shirt, high-waisted baggy khaki cargo pants" },
+          { name: "Coding at Desk (Pants)", description: "tight graphic navy blue crop top, baggy off-white linen pants" },
+          { name: "Site Structural (Pants)", description: "tight light gray shirt, high-waisted baggy khaki cargo pants" },
+          { name: "Design Diva (Trousers)", description: "tight graphic light gray crop top, baggy black trousers" },
+          { name: "Brainstorm Beauty (Dress)", description: "short burgundy form-fitting dress, thin black cardigan" },
+          { name: "Coffee Break (Pants)", description: "tight light gray crop top, baggy tan linen pants" },
+          { name: "Working Late (Trousers)", description: "tight-fitting light gray ribbed crop top, high-waisted baggy black trousers" }
+        ],
+        fantasyCreativeOutfits: [
+          { name: "Fantasy Costume", description: "magical fantasy outfit" },
+          { name: "Creative Wear", description: "artistic creative clothing" },
+          { name: "Mystical Garb", description: "mystical themed attire" },
+          { name: "Artistic Style", description: "unique artistic fashion" },
+          { name: "Imaginative Outfit", description: "creative imaginative wear" }
+        ],
+        theMallRetailPoses: [
+          { name: "At the Mall", description: "shopping bags, polished tile floor, mannequins, display windows, riding escalator, modern shopping mall" },
+          { name: "Browse Clothes Rack", description: "pulling hangers, clothes rack, fitting room, modern clothing store" },
+          { name: "Browse in Store", description: "shelves, skincare bottles, nail polish, tote bag, cosmetics shop, sleek white shelves" },
+          { name: "Carrying Bubble Tea", description: "plastic cup, pastel boba drink, thick straw, condensation, bright mall food court" },
+          { name: "Carrying Large Item", description: "struggling, large awkward-shaped box, navigating aisle, home goods store" },
+          { name: "Grocery Shopping", description: "shopping cart, produce aisle, bananas, cereal, overhead fluorescent lighting" },
+          { name: "Paying at Checkout", description: "supermarket checkout lane, pulling wallet, conveyor belt, cashier" },
+          { name: "Picking Produce", description: "bending, fresh vegetables, hand reaching, bunch of broccoli, mist, grocery store" },
+          { name: "Pushing a Cart", description: "pushing metal shopping cart, supermarket aisle, tall shelves, products" },
+          { name: "Reading Label", description: "holding small bottle of lotion, squinting to read label, colorful cosmetics aisle" },
+          { name: "Testing Perfume", description: "perfume, fancy bottle, wrist, eyes closed, perfume counter, department store" },
+          { name: "Trying on Hat", description: "three-way mirror, hat tilted on head, rows of hats, display stands" },
+          { name: "Trying on Shoe", description: "low bench, shoe store, new shoe, shoe boxes" },
+          { name: "Waiting in Line", description: "long line, department store, shopping basket" }
+        ],
+        homeIndoorSpacesPoses: [
+          { name: "Relaxing in Bath", description: "bubble bath, candles, bath products, clean modern tub" },
+          { name: "Laying in Bed on Cell Phone", description: "messy bed, soft blankets, dim light from phone screen, dark room" },
+          { name: "Watching a Series", description: "cozy blanket, couch, tablet playing show, snack bowl,modern living room" },
+          { name: "Gaming on Couch", description: "sitting on sofa, leaning forward, holding video game controller, large TV screen" },
+          { name: "Reading in Chair", description: "curled up, comfy armchair, book open, floor lamp, bookshelf, home library" },
+          { name: "Cuddling with Pet", description: "lying on rug, arm wrapped around cat or dog, fireplace, cozy living room" },
+          { name: "Stretching in the Morning", description: "arms overhead, stretching, front of large window, tidy bedroom" },
+          { name: "Journaling", description: "lined notebook, open on desk, pen, polaroids, washi tape, tidy wooden desk" },
+          { name: "Working on Laptop", description: "sitting at wooden desk, typing on laptop, messy papers, coffee mug nearby" },
+          { name: "Doing a Puzzle", description: "leaning over dining room table, placing puzzle piece, half-finished jigsaw puzzle" },
+          { name: "Painting Nails", description: "small nail polish bottles, vanity, one hand held still, wet polish, clean wooden table" },
+          { name: "Trying on Outfits", description: "open closet, colorful panties scattered on bed, mirror, bedroom, " },
+          { name: "Making TikTok Video", description: "ring light, tripod, open phone camera, colorful bedroom wall, blue dildo, LED strip lights" },
+          { name: "Looking Out Window", description: "open window, sheer curtains blowing, partly cloudy sky, peaceful indoor setting" },
+          { name: "Cooking in Kitchen", description: "standing at kitchen counter, chopping vegetables, stainless steel appliances, hanging pots, modern kitchen" },
+          { name: "Folding Laundry", description: "laundry on floor, dirty colorful panties on the floor, folded shirts, laundry basket, clean living space" },
+          { name: "Watering Plants", description: "holding small watering can, potted plants, windowsill" },
+          { name: "Closet Organization", description: "kneeling on floor, open closet, sorting pile of folded sweaters, shelves, shoe racks" }
+        ],
+        natureParksPoses: [
+          { name: "Gardening Work", description: "flowers, garden plants" },
+          { name: "Hiking Trail", description: "hiking trail, dense trees, foliage" },
+          { name: "Rock Scramble", description: "moss-covered rocks,stream, trees, forest" },
+          { name: "Sand Dune Climb", description: "sand dune, desert landscape" },
+          { name: "Sitting with Friends on Grass", description: "picnic blanket, grassy field, drinks, snacks, city park" },
+          { name: "Hillside Sit", description: "grassy hill, wildflowers, distant mountains" },
+          { name: "Park Bench Sit", description: "bench, lawn, trees" },
+          { name: "Hanging Out with Friends", description: "park bench, tree shade, soda cans, headphones, backpacks" },
+          { name: "Texting on Phone", description: "smartphone, both hands, thumbs typing, park bench, backpack" },
+          { name: "Bending to Pick Up", description: "garden, colorful blossoms, green leaves" },
+          { name: "Campfire Sit", description: "campfire, roasting marshmallows, stick, forest, night" },
+          { name: "Strolling in Park", description: "stone path, park, statues, fountains" },
+          { name: "Playful Jump", description: "autumn leaves pile, forest, tall trees, colorful leaves" },
+          { name: "Tree Swing", description: "rope swing, green field" },
+          { name: "Bench Backbend", description: "wooden bench, garden, walking path" },
+          { name: "Bench Straddle", description: "bench, train station" },
+          { name: "Drying Laundry", description: "hanging laundry, clothesline, backyard" },
+          { name: "Mountain View", description: "cliff edge, mountain range, cloudy sky" },
+          { name: "Dramatic Lean", description: "wooden railing, coastline, crashing waves" },
+          { name: "Windy Skirt Moment", description: "windy, prairie, tall grasses" }
+        ],
+        schoolCampusPoses: [
+          { name: "Getting Books from Locker", description: "open locker, textbooks, notebooks, hallway, backpacks, college building" },
+          { name: "Walking Through College", description: "lockers, bag strap, university hallway, doors open" },
+          { name: "Eating at Cafeteria with Friends", description: "lunch trays, cafeteria table, drinks, snacks, university cafeteria" },
+          { name: "Staircase Climb", description: "climbing spiral staircase, elegant interior" },
+          { name: "Lockers and Changing Area", description: "lockers, changing stalls, flip-flops, swim bag, rec center" },
+          { name: "Hallway Chat", description: "hallway, lockers, university" },
+          { name: "Vending Machine Snack", description: "vending machine, scanning snacks, colorful chips, candy, college hallway" },
+          { name: "Common Room Game", description: "low sofa, student common room, board game" },
+          { name: "Lab Work", description: "safety glasses, lab coat, beaker, bubbling liquid, scientific equipment, university lab" },
+          { name: "Library Study", description: "wooden table, quiet library, book stacks, desk lamp, textbook, campus library" },
+          { name: "Lecture Hall Notes", description: "flip-up desk, lecture hall, writing notebook, empty seats, projector screen" },
+          { name: "Quad Sit", description: "oak tree, college quad, backpack, brick building" },
+          { name: "Bulletin Board", description: "hallway, reading flyers, posters, bulletin board" },
+          { name: "Bleacher Sit", description: "metal bleachers, football field" }
+        ],
+        sportsRecreationPoses: [
+          { name: "Acrobatic Split", description: "gymnastics mat, gym, blue walls" },
+          { name: "Gym Stretch", description: "ballet studio, cream walls, large mirror" },
+          { name: "Practicing Dance Moves", description: "mirror wall, empty studio, phone speaker, water bottle" },
+          { name: "Yoga Pose", description: "yoga mat, studio, large windows, wood floor" },
+          { name: "High Kick", description: "stage, red curtain" },
+          { name: "Baseball Catch", description: "baseball glove, nbaseball field, green fence" },
+          { name: "Basketball Hoop", description: "basketball court, gym, wood floors" },
+          { name: "Tennis Serve", description: "tennis court, ball in air, chain-link fence" },
+          { name: "Skateboarding at Park", description: "skateboard, concrete ramp" },
+          { name: "Skateboard Fall", description: "concrete ramp, graffiti walls" },
+          { name: "Bike Adjustment", description: "bicycle, pedals, suburban street, houses, mailbox" },
+          { name: "Ice Skating Wobble", description: "skating rink, city skyline" },
+          { name: "Grass Stretching 1", description: "grass, athletic field" },
+          { name: "Grass Stretching 2", description: "grassy field, bleachers" },
+          { name: "Grass Stretching 3", description: "field, stadium" },
+          { name: "Starting Block Pose", description: "starting block, race, red track, lane markers" },
+          { name: "Baton Pass", description: "running relay, baton, teammate, athletic track" },
+          { name: "Finish Line Sprint", description: "finish line, athletic field, spectators, stadium" },
+          { name: "Hurdle Clear", description: "blue track, stadium" },
+          { name: "High Jump Arch", description: "high jump bar, landing mat" },
+          { name: "Long Jump Takeoff", description: "long jump pit, sandy pit, stadium" },
+          { name: "Pole Vault Ascent", description: "pole vault,  high bar, landing mat, stadium" },
+          { name: "Distance Running", description: "cross-country trail, forested path" },
+          { name: "Hill Climb", description: "uphill, steep grassy hill, cross country running" },
+          { name: "Creek Crossing", description: "shallow creek, rocky, splashing water, wooded trail, cross country" },
+          { name: "Mid-Race Focus", description: "cross country running, dirt path, pine forest, focused expression" },
+          { name: "Water Stop", description: "water station, cups, paper cups scattered, cross country course" },
+          { name: "Post-Race Cool Down", description: "hands on hips, shoulders slumped, cross country running, race banner, stadium" },
+          { name: "Discus Release", description: "grass field, cage background" },
+          { name: "Shot Put Throw", description: "shot put ball, neck, concrete throwing circle, stadium" }
+        ],
+        urbanCityLifePoses: [
+          { name: "Airport Stretch", description: "line of seats, empty gate area, modern airport terminal" },
+          { name: "At a Dirty Gas Station", description: "old fuel pump, cracked paint, convenience store, flickering neon sign, litter on asphalt" },
+          { name: "At Airport", description: "rolling suitcase, terminal window, departure screens glowing, line of seats, charging stations" },
+          { name: "At Bus Stop", description: "metal bench, suburban bus stop, backpack, overhead shelter, faded route map" },
+          { name: "Folding Laundry Mat", description: "folding table, neatly folding clothes, rows of washing machines, laundromat" },
+          { name: "Loading Washer", description: "washing machine, laundry basket, detergent bottle, laundromat" },
+          { name: "Waiting for Laundry", description: "sitting on plastic chair, scrolling on phone, large laundry bag, machines humming" },
+          { name: "Watching Dryer", description: "peering intently, transparent dryer door, clothes tumbling, reflection" },
+          { name: "Balcony Pose", description: "balcony railing, high-rise balcony, cityscape below" },
+          { name: "Bus Stop Lean", description: "metal bus stop pole, busy city street" },
+          { name: "Cafe Window", description: "sitting at small cafe table, by window, looking out, rainy street, quaint cafe" },
+          { name: "Concert Crowd", description: "dense crowd, hands raised in air" },
+          { name: "Festival Parade", description: "vibrant parade, colorful costume, onlookers on sidewalk" },
+          { name: "Street Performer", description: "accordion, bustling street corner, crowd of people" },
+          { name: "Subway Pole Grip", description: "subway pole, commuters, subway car" },
+          { name: "Waiting Stand", description: "airport terminal, rolling luggage, people walking by" },
+          { name: "Wall Sit", description: "textured brick wall, city street scene" },
+          { name: "Windy Walk", description: "breezy pier,  boats docked, skyline" }
+        ],
+        waterActivitiesBeachesPoses: [
+          { name: "Lounging at Pool Sunbathing", description: "towel, lounge chair, resort pool, sunglasses, water reflecting strong sunlight" },
+          { name: "Sunscreen Application", description: "sunscreen, beach towel, beach umbrella" },
+          { name: "Splashing in Shallow Pool", description: "shallow wave pool, plastic chairs, pool bags, water park" },
+          { name: "Wading Pool Splash", description: "shallow wading pool, colorful fountains, resort pool" },
+          { name: "Riding Down a Waterslide", description: "waterslide, splashing, water park" },
+          { name: "Floating in Lazy River", description: "inflatable inner tubes, lazy river, palm trees, bridge above, resort" },
+          { name: "Climbing Up Rope Net", description: "roped cargo net, splash pad, water jets, water park" },
+          { name: "Standing Under Giant Water Bucket", description: "tipping water bucket, mid-pour, play tower" },
+          { name: "Getting into Tube", description: "large inner tube, lazy river entrance" },
+          { name: "Waiting in Line for Waterslide", description: "colorful stairway, people waiting in line, tubes stacked nearby, water park" },
+          { name: "Running Across Wet Concrete", description: "wet footprints, concrete walkway, towels, water mist, water park" },
+          { name: "Towel Tangle", description: "towel, deck of resort, lounge chairs" },
+          { name: "Drying Off with Towel", description: "towel, pool chair, swimming gear" },
+          { name: "Mid-Dive Prep", description: "diving board edge, arms outstretched, tense, shimmering blue water, diving lanes" },
+          { name: "Selfie by Pool", description: "selfie, smiling, crowded pool deck, resort" },
+          { name: "Eating Snack by Pool", description: "plastic tray, fries and drink, table, wet towels on chairs, resort pool" },
+          { name: "Concession Stand Order", description: "standing at concession stand, crumpled bill, menu boards, plastic food trays" },
+          { name: "River Crossing", description: "wading through shallow rocky river, forested trail" },
+          { name: "Canoe Paddle", description: "sitting in canoe, calm lake, paddle, wooded shoreline" },
+          { name: "Fishing Pier", description: "fishing pier edge, legs over water, holding fishing rod, scenic lake" },
+          { name: "Beach Ball Catch", description: "beach ball, sand volleyball court, sandy beach, palm trees" },
+          { name: "Sandcastle Build", description: "sand, scooping with bucket, sandcastle, wide sandy beach" },
+          { name: "Shoreline Sit", description: "wet shoreline, gentle waves, calm ocean" },
+          { name: "Wave Jump", description: "crashing ocean wave, sandy beach, clear horizon" }
+        ],
+        workCareerPoses: [
+          { name: "First Job/Career", description: "modern office, large windows" },
+          { name: "Office Environment", description: "cubicle, computer, open-plan office" },
+          { name: "Professional Meeting", description: "conference room, large table, whiteboard covered in notes" },
+          { name: "Project Site", description: "hard hat, safety vest, looking at blueprints, construction site" },
+          { name: "Coding at Desk", description: "two large computer monitors, lines of code, modern office" },
+          { name: "Site Visit", description: "hard hat, bright vest, half-finished steel building frame, blueprint" },
+          { name: "Design Software", description: "computer screen, complex 3D model, building's structure, mouse and keyboard" },
+          { name: "Whiteboard Brainstorm", description: "whiteboard, flowcharts, code snippets, markers, conference room" },
+          { name: "Coffee Break", description: "coffee machine, office breakroom, iphone" },
+          { name: "Working Late", description: "office at night, desk lamp, computer screen, half-eaten takeout food" }
+        ],
+        fantasyCreativePoses: [
+          { name: "Magical Pose", description: "enchanting magical position" },
+          { name: "Creative Expression", description: "artistic expression pose" },
+          { name: "Fantasy Character", description: "fantasy role position" },
+          { name: "Artistic Stance", description: "creative artistic pose" },
+          { name: "Imaginative Position", description: "unique creative position" }
+        ]
+      };
+      
+      // Map category names to the correct data arrays
+      switch (category) {
+        case 'locations':
+          logger.info(`📍 Processing locations data...`);
+          dataToExport = [
+            ...staticSceneData.theMallRetailLocations.map((item: any) => ({ subcategory: 'The Mall & Retail', ...item })),
+            ...staticSceneData.homeIndoorSpacesLocations.map((item: any) => ({ subcategory: 'Home & Indoor Spaces', ...item })),
+            ...staticSceneData.natureParksLocations.map((item: any) => ({ subcategory: 'Nature & Parks', ...item })),
+            ...staticSceneData.schoolCampusLocations.map((item: any) => ({ subcategory: 'School & Campus', ...item })),
+            ...staticSceneData.sportsRecreationLocations.map((item: any) => ({ subcategory: 'Sports & Recreation', ...item })),
+            ...staticSceneData.urbanCityLifeLocations.map((item: any) => ({ subcategory: 'Urban & City Life', ...item })),
+            ...staticSceneData.waterActivitiesBeachesLocations.map((item: any) => ({ subcategory: 'Water Activities & Beaches', ...item })),
+            ...staticSceneData.workCareerLocations.map((item: any) => ({ subcategory: 'Work & Career', ...item })),
+            ...staticSceneData.fantasyCreativeLocations.map((item: any) => ({ subcategory: 'Fantasy & Creative', ...item }))
+          ];
+          logger.info(`📍 Locations data processed, ${dataToExport.length} items`);
+          break;
+          
+        case 'outfits':
+          dataToExport = [
+            ...staticSceneData.theMallRetailOutfits.map((item: any) => ({ subcategory: 'The Mall & Retail', ...item })),
+            ...staticSceneData.homeIndoorSpacesOutfits.map((item: any) => ({ subcategory: 'Home & Indoor Spaces', ...item })),
+            ...staticSceneData.natureParksOutfits.map((item: any) => ({ subcategory: 'Nature & Parks', ...item })),
+            ...staticSceneData.schoolCampusOutfits.map((item: any) => ({ subcategory: 'School & Campus', ...item })),
+            ...staticSceneData.sportsRecreationOutfits.map((item: any) => ({ subcategory: 'Sports & Recreation', ...item })),
+            ...staticSceneData.urbanCityLifeOutfits.map((item: any) => ({ subcategory: 'Urban & City Life', ...item })),
+            ...staticSceneData.waterActivitiesBeachesOutfits.map((item: any) => ({ subcategory: 'Water Activities & Beaches', ...item })),
+            ...staticSceneData.workCareerOutfits.map((item: any) => ({ subcategory: 'Work & Career', ...item })),
+            ...staticSceneData.fantasyCreativeOutfits.map((item: any) => ({ subcategory: 'Fantasy & Creative', ...item }))
+          ];
+          break;
+          
+        case 'poses':
+          dataToExport = [
+            ...staticSceneData.theMallRetailPoses.map((item: any) => ({ subcategory: 'The Mall & Retail', ...item })),
+            ...staticSceneData.homeIndoorSpacesPoses.map((item: any) => ({ subcategory: 'Home & Indoor Spaces', ...item })),
+            ...staticSceneData.natureParksPoses.map((item: any) => ({ subcategory: 'Nature & Parks', ...item })),
+            ...staticSceneData.schoolCampusPoses.map((item: any) => ({ subcategory: 'School & Campus', ...item })),
+            ...staticSceneData.sportsRecreationPoses.map((item: any) => ({ subcategory: 'Sports & Recreation', ...item })),
+            ...staticSceneData.urbanCityLifePoses.map((item: any) => ({ subcategory: 'Urban & City Life', ...item })),
+            ...staticSceneData.waterActivitiesBeachesPoses.map((item: any) => ({ subcategory: 'Water Activities & Beaches', ...item })),
+            ...staticSceneData.workCareerPoses.map((item: any) => ({ subcategory: 'Work & Career', ...item })),
+            ...staticSceneData.fantasyCreativePoses.map((item: any) => ({ subcategory: 'Fantasy & Creative', ...item }))
+          ];
+          break;
+          
+        default:
+          return res.status(404).json({ message: "Category not found" });
+      }
+      
+      logger.info(`📊 Exporting ${dataToExport.length} items for ${category}`);
+      
+      // Convert to CSV format
+      const csvData = [
+        ['subcategory', 'name', 'description'],
+        ...dataToExport.map(item => [item.subcategory, item.name, item.description])
+      ];
+      
+      const csvContent = csvData.map(row => 
+        row.map(field => `"${field?.replace(/"/g, '""') || ''}"`).join(',')
+      ).join('\n');
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${category}.csv"`);
+      res.send(csvContent);
+    } catch (error) {
+      logger.error(`Failed to download ${req.params.category} CSV:`, error);
+      res.status(500).json({ message: "Failed to download CSV" });
+    }
+  });
+
+  // Scene Data File Upload (CSV or Plain Text)
+  app.post("/api/scene-data/upload/:category", async (req, res) => {
+    try {
+      const { category } = req.params;
+      const { fileContent } = req.body;
+      
+      if (!fileContent) {
+        return res.status(400).json({ message: "File content is required" });
+      }
+      
+      const lines = fileContent.split('\n').filter((line: string) => line.trim());
+      
+      if (lines.length < 1) {
+        return res.status(400).json({ message: "File must have at least one line of data" });
+      }
+      
+      const sceneItems = [];
+      
+      // Check if it's CSV format (has headers)
+      const firstLine = lines[0].toLowerCase();
+      const isCSV = firstLine.includes('subcategory') && firstLine.includes('name') && firstLine.includes('description');
+      
+      if (isCSV) {
+        // Parse as CSV
+        if (lines.length < 2) {
+          return res.status(400).json({ message: "CSV must have header and at least one data row" });
+        }
+        
+        // Skip header row and parse data
+        const dataRows = lines.slice(1);
+        
+        for (const line of dataRows) {
+          // Improved CSV parsing that properly handles quoted fields with commas
+          const fields = [];
+          let current = '';
+          let inQuotes = false;
+          let i = 0;
+          
+          while (i < line.length) {
+            const char = line[i];
+            
+            if (char === '"') {
+              if (inQuotes && line[i + 1] === '"') {
+                // Escaped quote (double quote)
+                current += '"';
+                i += 2;
+              } else {
+                // Toggle quote state
+                inQuotes = !inQuotes;
+                i++;
+              }
+            } else if (char === ',' && !inQuotes) {
+              // Field separator (outside quotes)
+              fields.push(current.trim());
+              current = '';
+              i++;
+            } else {
+              current += char;
+              i++;
+            }
+          }
+          
+          // Add the last field
+          fields.push(current.trim());
+          
+          if (fields.length >= 3) {
+            let [subcategory, name, description] = fields;
+            
+            // Remove quotes from fields if they exist
+            subcategory = subcategory.replace(/^"(.*)"$/, '$1');
+            name = name.replace(/^"(.*)"$/, '$1');
+            description = description.replace(/^"(.*)"$/, '$1');
+            
+            if (subcategory && name && description) {
+              sceneItems.push({
+                category,
+                subcategory,
+                name,
+                description
+              });
+            }
+          }
+        }
+      } else {
+        // Parse as plain text (one item per line)
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (trimmedLine) {
+            sceneItems.push({
+              category,
+              subcategory: "General",
+              name: trimmedLine,
+              description: trimmedLine
+            });
+          }
+        }
+      }
+      
+      // Validate we have data to upload
+      if (sceneItems.length === 0) {
+        return res.status(400).json({ message: "No valid data found in file" });
+      }
+      
+      // Replace existing data for this category
+      await storage.replaceSceneDataForCategory(category, sceneItems);
+      
+      res.json({ 
+        message: `Successfully uploaded ${sceneItems.length} ${category} items`,
+        count: sceneItems.length 
+      });
+    } catch (error) {
+      logger.error(`Failed to upload ${req.params.category} file:`, error);
+      res.status(500).json({ message: "Failed to upload file" });
+    }
+  });
+
+  // Get all scene data by category
+  app.get("/api/scene-data/:category", async (req, res) => {
+    try {
+      const { category } = req.params;
+      const sceneData = await storage.getSceneDataByCategory(category);
+      res.json(sceneData);
+    } catch (error) {
+      logger.error(`Failed to fetch ${req.params.category} data:`, error);
+      res.status(500).json({ message: "Failed to fetch scene data" });
+    }
+  });
+
+  // Saved Scenes routes
+  app.get("/api/saved-scenes", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const filters = {
+        locationCategory: req.query.locationCategory as string,
+        location: req.query.location as string,
+        outfit: req.query.outfit as string,
+        pose: req.query.pose as string,
+      };
+      
+      // Remove undefined values
+      Object.keys(filters).forEach(key => {
+        if (!filters[key as keyof typeof filters]) delete filters[key as keyof typeof filters];
+      });
+      
+      const scenes = await storage.getUserSavedScenes(userId, Object.keys(filters).length > 0 ? filters : undefined);
+      res.json(scenes);
+    } catch (error) {
+      logger.error("Error fetching saved scenes:", error);
+      res.status(500).json({ error: "Failed to fetch saved scenes" });
+    }
+  });
+
+  app.post("/api/saved-scenes", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const data = insertSavedSceneSchema.parse(req.body);
+      const scene = await storage.createSavedScene({ ...data, userId });
+      res.status(201).json(scene);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ error: "Invalid data", details: error.errors });
+      }
+      logger.error("Error creating saved scene:", error);
+      res.status(500).json({ error: "Failed to create saved scene" });
+    }
+  });
+
+  // Get shared scenes (must be before /:id route)
+  app.get("/api/saved-scenes/shared", isAuthenticated, async (req: any, res) => {
+    try {
+      const scenes = await storage.getSharedScenes();
+      res.json(scenes);
+    } catch (error) {
+      logger.error("Error fetching shared scenes:", error);
+      res.status(500).json({ error: "Failed to fetch shared scenes" });
+    }
+  });
+
+  app.get("/api/saved-scenes/:id", async (req, res) => {
+    try {
+      const scene = await storage.getSavedScene(req.params.id);
+      if (!scene) {
+        return res.status(404).json({ error: "Saved scene not found" });
+      }
+      res.json(scene);
+    } catch (error) {
+      logger.error("Error fetching saved scene:", error);
+      res.status(500).json({ error: "Failed to fetch saved scene" });
+    }
+  });
+
+  app.put("/api/saved-scenes/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const updated = await storage.updateSavedScene(req.params.id, userId, req.body);
+      if (!updated) {
+        return res.status(404).json({ error: "Saved scene not found or not authorized" });
+      }
+      res.json(updated);
+    } catch (error) {
+      logger.error("Error updating saved scene:", error);
+      res.status(500).json({ error: "Failed to update saved scene" });
+    }
+  });
+
+  app.delete("/api/saved-scenes/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const deleted = await storage.deleteSavedScene(req.params.id, userId);
+      if (!deleted) {
+        return res.status(404).json({ error: "Saved scene not found or not authorized" });
+      }
+      res.json({ message: "Saved scene deleted successfully" });
+    } catch (error) {
+      logger.error("Error deleting saved scene:", error);
+      res.status(500).json({ error: "Failed to delete saved scene" });
+    }
+  });
+
+  // AI generation for scene title and description
+  app.post("/api/saved-scenes/generate-title-description", async (req, res) => {
+    try {
+      const { prompt, currentTitle, currentDescription, tags, locationCategory, location, outfit } = req.body;
+      
+      if (!prompt) {
+        return res.status(400).json({ error: "Prompt is required" });
+      }
+      
+      const result = await generateSceneTitleAndDescription(
+        prompt, 
+        currentTitle, 
+        currentDescription, 
+        tags, 
+        locationCategory, 
+        location, 
+        outfit
+      );
+      
+      logger.info("AI generation result before sending to frontend:", result);
+      res.json(result);
+    } catch (error) {
+      logger.error("Error generating title and description:", error);
+      res.status(500).json({ error: "Failed to generate title and description" });
+    }
+  });
+
+
+  // Toggle scene sharing status
+  app.put("/api/saved-scenes/:id/share", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const { isShared } = req.body;
+      
+      logger.info(`Toggling scene ${req.params.id} sharing to: ${isShared} by user: ${userId}`);
+      
+      const scene = await storage.toggleSceneShared(req.params.id, userId, isShared);
+      if (!scene) {
+        return res.status(404).json({ error: "Scene not found or not authorized" });
+      }
+      
+      res.json(scene);
+    } catch (error) {
+      logger.error("Error toggling scene sharing:", error);
+      res.status(500).json({ error: "Failed to toggle scene sharing" });
+    }
+  });
+
+}

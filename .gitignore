@@ -1,0 +1,29 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+cookies.txt
+
+# Data exports & DB dumps — never commit user data
+*_export.json
+*_export.csv
+*.sql
+*.dump
+image_urls_for_migration.json
+migration_summary.json
+
+# Backup / scratch files
+*.backup
+*.bak
+*(copy)*
+*.log
+
+# Generated images / user uploads — kept out of git
+attached_assets/

@@ -1,0 +1,5 @@
+- [CivitAI orchestration scope](civitai-orchestration.md) — JS SDK only exposes textToImage; all other job types use direct fetch to orchestration.civitai.com/v2/consumer/workflows.
+- [CivitAI v2 workflows shape](civitai-v2-workflows.md) — `/v2/consumer/workflows` step `$type=imageGen`; txt2img=createImage, img2img=createVariant; see file for enums, seed omit-when-random, SSRF guard.
+- [BatchPoller reuse for video](batch-poller-video.md) — branch on `mediaType:'video'` inside poller result handler; never fork the polling system for new media types.
+- [img2vid videoGen recipe](civitai-videogen-recipe.md) — use documented engine/version/provider/operation shape; wrong shape → false insufficientBuzz; NSFW needs comfy provider.
+- [AI Enhance prompt rules](ai-enhance-prompt.md) — enhancer must NOT add score_* tokens (generation pipeline injects them); age guards run post-generation; per-user learned style profile updated by Grok each press.
