@@ -17,6 +17,7 @@ export default defineConfig({
       : []),
   ],
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
@@ -29,6 +30,9 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    headers: {
+      "Cache-Control": "no-store",
+    },
     fs: {
       strict: true,
       deny: ["**/.*"],

@@ -3,3 +3,4 @@
 - [BatchPoller reuse for video](batch-poller-video.md) — branch on `mediaType:'video'` inside poller result handler; never fork the polling system for new media types.
 - [img2vid videoGen recipe](civitai-videogen-recipe.md) — use documented engine/version/provider/operation shape; wrong shape → false insufficientBuzz; NSFW needs comfy provider.
 - [AI Enhance prompt rules](ai-enhance-prompt.md) — enhancer must NOT add score_* tokens (generation pipeline injects them); age guards run post-generation; per-user learned style profile updated by Grok each press.
+- [Replit Vite dev blank screen fix](replit-vite-cache-fix.md) — add `Cache-Control: no-store` header + `resolve.dedupe:['react','react-dom']` in vite.config.ts to fix blank screen from stale browser dep cache.
