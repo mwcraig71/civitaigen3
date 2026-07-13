@@ -48,6 +48,8 @@ html {
 /* Force scroll when content overflows */
 body {
   overflow-y: auto !important;
+  background-color: hsl(240, 20%, 4%);
+  color: hsl(180, 100%, 90%);
 }
 
 /* Mobile-specific fixes for generation panel */
