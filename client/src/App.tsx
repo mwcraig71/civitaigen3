@@ -113,30 +113,13 @@ function Router() {
     enabled: isAuthenticated && !isLoading,
   });
 
-  // Show loading fallback while checking maintenance status to prevent content flash
-  if (maintenanceLoading) {
-    return <PageLoadingFallback />;
-  }
-
-  // Show maintenance screen for non-admin users when maintenance mode is enabled
-  if (showMaintenanceScreen) {
-    return (
-      <MaintenanceMode 
-        message={maintenanceMessage}
-        onRetry={() => {
-          // Refetch maintenance status when user clicks retry
-          refetch();
-        }}
-      />
-    );
-  }
-
-  // Show age verification page if user hasn't verified their age
-  if (!isAgeLoading && !isVerified) {
+  // Age gate is synchronous — check it first before any network requests complete.
+  // This ensures the modal appears instantly with no spinner flash preceding it.
+  if (!isVerified) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-        {/* SEO-optimized age verification page */}
-        <div className="container mx-auto px-4 py-8">
+        {/* SEO content — invisible to users but present for search engines */}
+        <div className="invisible container mx-auto px-4 py-8" aria-hidden="true">
           <header className="text-center mb-8">
             <h1 className="text-4xl md:text-6xl font-bold bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent mb-4">
               CiviVerse - Adult Porn AI Image Generation Platform
@@ -214,16 +197,25 @@ function Router() {
     );
   }
 
-  // Show loading state while checking age verification
-  if (isAgeLoading) {
+  // Now check maintenance — only for age-verified users
+  if (maintenanceLoading) {
+    return <PageLoadingFallback />;
+  }
+
+  if (showMaintenanceScreen) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-          <p className="text-white">Loading...</p>
-        </div>
-      </div>
+      <MaintenanceMode 
+        message={maintenanceMessage}
+        onRetry={() => {
+          refetch();
+        }}
+      />
     );
+  }
+
+  // Hold here while auth loads so we never flash the Landing page for authenticated users
+  if (isLoading) {
+    return <PageLoadingFallback />;
   }
 
   return (
