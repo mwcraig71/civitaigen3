@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Eye } from 'lucide-react';
-import { apiRequest, queryClient } from '@/lib/queryClient';
+import { apiRequest, queryClient, getQueryFn } from '@/lib/queryClient';
 
 export function ImpersonationBanner() {
   const { data: status } = useQuery<{
@@ -14,6 +14,7 @@ export function ImpersonationBanner() {
     };
   }>({
     queryKey: ['/api/admin/impersonation-status'],
+    queryFn: getQueryFn({ on401: 'returnNull' }),
     refetchInterval: false,
   });
 

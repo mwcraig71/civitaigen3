@@ -29,6 +29,11 @@ export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
     middlewareMode: true,
     hmr: false as const,
+    // hmr:false alone is NOT enough — Vite still opens its HMR WebSocket
+    // server on port 24678 unless ws:false is also set. That listener answers
+    // the HMR client's ping with HTTP 426, which the client interprets as
+    // "server is back up" → full page reload → infinite reload loop.
+    ws: false as const,
     allowedHosts: true as const,
   };
 
@@ -44,6 +49,57 @@ export async function setupVite(app: Express, server: Server) {
     },
     server: serverOptions,
     appType: "custom",
+  });
+
+  // Serve a stub for /@vite/client BEFORE vite.middlewares. Even with hmr:false,
+  // transformed modules (e.g. CSS) import createHotContext/updateStyle from
+  // "/@vite/client" — loading the real client starts its WebSocket + poll/reload
+  // loop, which fails through Replit's proxy and keeps reloading the page.
+  // The stub implements the style-injection API (required for CSS to work in dev)
+  // and no-ops all HMR behavior.
+  const viteClientStub = `
+const sheetsMap = new Map();
+export function updateStyle(id, content) {
+  let style = sheetsMap.get(id);
+  if (!style) {
+    style = document.createElement("style");
+    style.setAttribute("type", "text/css");
+    style.setAttribute("data-vite-dev-id", id);
+    style.textContent = content;
+    document.head.appendChild(style);
+    sheetsMap.set(id, style);
+  } else {
+    style.textContent = content;
+  }
+}
+export function removeStyle(id) {
+  const style = sheetsMap.get(id);
+  if (style) {
+    document.head.removeChild(style);
+    sheetsMap.delete(id);
+  }
+}
+export function injectQuery(url) { return url; }
+export function createHotContext() {
+  return {
+    get data() { return {}; },
+    accept() {},
+    acceptExports() {},
+    dispose() {},
+    prune() {},
+    invalidate() {},
+    on() {},
+    off() {},
+    send() {},
+  };
+}
+export class ErrorOverlay {}
+`;
+  app.get("/@vite/client", (_req, res) => {
+    res
+      .status(200)
+      .set({ "Content-Type": "text/javascript", "Cache-Control": "no-store" })
+      .end(viteClientStub);
   });
 
   app.use(vite.middlewares);
@@ -64,7 +120,14 @@ export async function setupVite(app: Express, server: Server) {
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`,
       );
-      const page = await vite.transformIndexHtml(url, template);
+      let page = await vite.transformIndexHtml(url, template);
+      // Belt-and-suspenders: remove any injected @vite/client script. Replit's
+      // proxy can't sustain the HMR WebSocket in all browsers, and the client's
+      // fallback (poll → full page reload) keeps interrupting the app load.
+      page = page.replace(
+        /<script[^>]*src="[^"]*\/@vite\/client"[^>]*><\/script>\s*/g,
+        "",
+      );
       res.status(200).set({ "Content-Type": "text/html" }).end(page);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
