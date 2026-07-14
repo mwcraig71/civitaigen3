@@ -20,12 +20,9 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
-  const replitDevDomain = process.env.REPLIT_DEV_DOMAIN;
   const serverOptions = {
     middlewareMode: true,
-    hmr: replitDevDomain
-      ? { server, host: replitDevDomain, clientPort: 443, protocol: "wss" as const }
-      : { server },
+    hmr: { server, clientPort: 443 },
     allowedHosts: true as const,
   };
 
