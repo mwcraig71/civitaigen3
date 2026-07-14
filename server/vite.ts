@@ -20,9 +20,15 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
+  // Replit's proxy doesn't support WebSocket upgrades, so the HMR client in the
+  // browser can never connect. This causes a polling loop (WS fails → ping succeeds
+  // → full page reload → repeat) that keeps interrupting the app.
+  // Setting hmr: false stops Vite from injecting @vite/client entirely, so the
+  // browser never polls. We keep fastRefresh:true (default) so the React preamble
+  // IS still injected via transformIndexHtml — component preamble checks still pass.
   const serverOptions = {
     middlewareMode: true,
-    hmr: { server, clientPort: 443 },
+    hmr: false as const,
     allowedHosts: true as const,
   };
 
