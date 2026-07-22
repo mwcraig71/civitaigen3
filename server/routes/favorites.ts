@@ -28,6 +28,7 @@ import OpenAI from "openai";
 import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
 
 import { type RouteContext, eq, and } from "./context";
+import { learnFromLikedImage } from "../preference-learning";
 
 export function registerFavoritesRoutes(app: Express, ctx: RouteContext) {
   // Get user favorites
@@ -112,6 +113,13 @@ export function registerFavoritesRoutes(app: Express, ctx: RouteContext) {
       
       const favorite = await storage.addFavorite(userId, generationId!);
       res.json(favorite);
+
+      // Learn from this like in the background: the image's prompt feeds the
+      // user's taste profile so AI Enhance reflects what they favorite.
+      (async () => {
+        const generation = await storage.getGeneration(generationId!);
+        await learnFromLikedImage(userId, generation?.prompt);
+      })().catch((e) => logger.error('⚠️ Favorite taste-learning failed:', e));
     } catch (error) {
       if (error instanceof ZodError) {
         return res.status(400).json({ message: "Invalid request data" });

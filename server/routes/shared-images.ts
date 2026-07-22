@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { logger } from "../logger";
+import { learnFromLikedImage } from "../preference-learning";
 import { requireAdmin } from "../middleware";
 import { getVapidPublicKey, saveSubscription, removeSubscription, sendPushToUser, pushEnabled } from "../push";
 import { randomUUID } from "crypto";
@@ -467,7 +468,16 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
     try {
       const userId = (req.user as any).claims.sub;
       const isLiked = await storage.likeSharedImage(req.params.id, userId);
-      
+
+      // Learn from this like in the background: the liked image's prompt feeds
+      // the liker's taste profile so AI Enhance reflects what they enjoy.
+      if (isLiked) {
+        (async () => {
+          const img = await storage.getSharedImage(req.params.id);
+          await learnFromLikedImage(userId, img?.prompt);
+        })().catch((e) => logger.error('⚠️ Shared-image taste-learning failed:', e));
+      }
+
       // Award 1 buzz to the image owner when someone likes their image (but not themselves)
       if (isLiked) {
         try {

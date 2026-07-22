@@ -393,7 +393,7 @@ export class GeminiService {
         (p.themes?.length || 0) + (p.avoid?.length || 0) > 0
       );
       const learnedProfileBlock = profileHasData
-        ? `\n\nLEARNED STYLE PROFILE (what this user tends to like, learned from their past prompts — apply it tastefully, but the current prompt's subject stays central):
+        ? `\n\nLEARNED STYLE PROFILE (what this user tends to like, learned from their past prompts and the images they've liked — apply it tastefully, but the current prompt's subject stays central. You may weave in fresh VARIATIONS of these preferences — e.g. a different outfit in a favored theme, a new pose in a favored framing — so results feel familiar but not repetitive):
 - Preferred styles: ${(p!.styles || []).join(', ') || '(none yet)'}
 - Preferred physical attributes: ${(p!.physicalAttributes || []).join(', ') || '(none yet)'}
 - Recurring themes: ${(p!.themes || []).join(', ') || '(none yet)'}
@@ -532,6 +532,7 @@ Return a JSON object with exactly these keys:
   async updateLearnedProfile(
     currentPrompt: string,
     existing: LearnedStyleProfile | null | undefined,
+    source: 'enhance' | 'liked' = 'enhance',
   ): Promise<LearnedStyleProfile | null> {
     const base: LearnedStyleProfile = {
       styles: existing?.styles ?? [],
@@ -557,10 +558,13 @@ Return a JSON object with exactly these keys:
       )).slice(0, 15);
 
     try {
+      const actionLine = source === 'liked'
+        ? 'The user just LIKED/FAVORITED an image that was generated from this prompt (a strong signal they enjoy what it depicts):'
+        : 'The user just clicked "Enhance" on this image prompt:';
       const learnPrompt = `Existing taste profile (may be empty):
 ${JSON.stringify({ styles: base.styles, physicalAttributes: base.physicalAttributes, themes: base.themes, avoid: base.avoid })}
 
-The user just clicked "Enhance" on this image prompt:
+${actionLine}
 """${currentPrompt.trim()}"""
 
 Update the taste profile to reflect what this user appears to like, combining the new prompt with the existing profile. Capture durable preferences, not one-off subjects.
@@ -594,7 +598,7 @@ Return a single JSON object: {"styles":[],"physicalAttributes":[],"themes":[],"a
         return { ...base, enhanceCount: base.enhanceCount + 1, updatedAt: new Date().toISOString() };
       }
       const parsed = JSON.parse(match[0]);
-      return {
+      let updated: LearnedStyleProfile = {
         styles: norm(parsed.styles),
         physicalAttributes: norm(parsed.physicalAttributes),
         themes: norm(parsed.themes),
@@ -602,9 +606,76 @@ Return a single JSON object: {"styles":[],"physicalAttributes":[],"themes":[],"a
         enhanceCount: base.enhanceCount + 1,
         updatedAt: new Date().toISOString(),
       };
+      // Periodic AI clean-up: every 20 learning events, ask Grok to distill the
+      // profile down to its strongest, most durable signals so it never drifts
+      // into a noisy grab-bag. Error-isolated — compression failure keeps the
+      // uncompressed profile.
+      if (updated.enhanceCount > 0 && updated.enhanceCount % 20 === 0) {
+        updated = await this.compressLearnedProfile(updated);
+      }
+      return updated;
     } catch (e) {
       logger.error('⚠️ Failed to update learned style profile:', e);
       return { ...base, enhanceCount: base.enhanceCount + 1, updatedAt: new Date().toISOString() };
+    }
+  }
+
+  /**
+   * AI clean-up pass. Asks Grok to distill an accumulated taste profile down to
+   * its strongest, most durable signals (max 10 per list), merging near-duplicate
+   * tags and dropping weak/one-off entries. Never throws — on failure the
+   * original profile is returned unchanged.
+   */
+  async compressLearnedProfile(profile: LearnedStyleProfile): Promise<LearnedStyleProfile> {
+    if (!openrouterClient) return profile;
+
+    const norm = (arr: unknown): string[] =>
+      Array.from(new Set(
+        (Array.isArray(arr) ? arr : [])
+          .map((s) => String(s).trim().toLowerCase())
+          .filter(Boolean),
+      )).slice(0, 10);
+
+    try {
+      const compressPrompt = `This is a user's accumulated image-taste profile, built up over ${profile.enhanceCount} interactions. It may contain redundancy, near-duplicates, or weak one-off entries.
+
+${JSON.stringify({ styles: profile.styles, physicalAttributes: profile.physicalAttributes, themes: profile.themes, avoid: profile.avoid })}
+
+Compress and clean it:
+- Merge near-duplicate or overlapping tags into a single best tag.
+- Drop weak, vague, or one-off entries; keep only clear, recurring preferences.
+- Each list: max 10 short lowercase tags, strongest signals first.
+- Never include minors/underage terms in any list.
+
+Return a single JSON object: {"styles":[],"physicalAttributes":[],"themes":[],"avoid":[]}`;
+
+      const completion = await openrouterClient.chat.completions.create({
+        model: GROK_MODEL,
+        messages: [
+          { role: 'system', content: 'You maintain a compact JSON taste profile for one user. Reply with a single JSON object only — no prose.' },
+          { role: 'user', content: compressPrompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+        max_tokens: 768,
+      });
+
+      const text = completion.choices[0]?.message?.content || '';
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) return profile;
+      const parsed = JSON.parse(match[0]);
+      logger.info('🧹 Compressed learned style profile at count', profile.enhanceCount);
+      return {
+        styles: norm(parsed.styles),
+        physicalAttributes: norm(parsed.physicalAttributes),
+        themes: norm(parsed.themes),
+        avoid: norm(parsed.avoid),
+        enhanceCount: profile.enhanceCount,
+        updatedAt: new Date().toISOString(),
+      };
+    } catch (e) {
+      logger.error('⚠️ Failed to compress learned style profile:', e);
+      return profile;
     }
   }
 }

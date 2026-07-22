@@ -18,6 +18,12 @@ Rules that the AI Enhance meta-prompt and its safety layer must keep obeying.
   `applyAgeSafetyGuards` always injects `18yo` into the positive prompt and a
   minor/CSAM negative floor, regardless of model output. Keep it in every return path.
 
+- **Taste profile also learns from likes.** Favoriting a generation or liking a
+  shared image feeds that image's prompt into the same learned profile
+  (fire-and-forget after the response; must never block or double-send). Every
+  20 learning events a Grok compression pass distills the profile (max 10 tags
+  per list); compression failure keeps the uncompressed profile.
+
 - **Self-learning style profile** lives on `users.learnedStyleProfile` (jsonb).
   Every Enhance press, `geminiService.updateLearnedProfile` asks Grok to merge the
   current prompt into the profile (styles / physicalAttributes / themes / avoid).
