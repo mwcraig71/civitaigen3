@@ -393,7 +393,8 @@ export class GeminiService {
         (p.themes?.length || 0) + (p.avoid?.length || 0) > 0
       );
       const learnedProfileBlock = profileHasData
-        ? `\n\nLEARNED STYLE PROFILE (what this user tends to like, learned from their past prompts and the images they've liked — apply it tastefully, but the current prompt's subject stays central. You may weave in fresh VARIATIONS of these preferences — e.g. a different outfit in a favored theme, a new pose in a favored framing — so results feel familiar but not repetitive):
+        ? `\n\nLEARNED STYLE PROFILE (what this user tends to like, learned from their past prompts and the images they've liked — apply it tastefully, but the current prompt's subject stays central. You may weave in fresh VARIATIONS of these preferences — e.g. a different outfit in a favored theme, a new pose in a favored framing — so results feel familiar but not repetitive.
+CONFLICT RULE (critical): if the current prompt or the user's instructions explicitly specify any attribute — hair color, hair style, body type, clothing, setting, etc. — that explicit choice ALWAYS wins. Skip any learned preference of the same category that would contradict or replace it. Example: if the prompt says "blonde hair", do NOT apply a learned preference like "dark brown hair" — keep blonde. Learned attributes may only fill gaps the prompt leaves unspecified):
 - Preferred styles: ${(p!.styles || []).join(', ') || '(none yet)'}
 - Preferred physical attributes: ${(p!.physicalAttributes || []).join(', ') || '(none yet)'}
 - Recurring themes: ${(p!.themes || []).join(', ') || '(none yet)'}

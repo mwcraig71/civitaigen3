@@ -24,6 +24,13 @@ Rules that the AI Enhance meta-prompt and its safety layer must keep obeying.
   20 learning events a Grok compression pass distills the profile (max 10 tags
   per list); compression failure keeps the uncompressed profile.
 
+- **Learned profile must never override explicit prompt attributes.**
+  **Why:** user reported blonde-hair prompts coming back brown — the learned
+  "dark brown hair" preference was being woven in over the explicit choice.
+  **How to apply:** keep the CONFLICT RULE in the learned-profile block of the
+  enhance meta-prompt: explicit prompt/user attributes always win; learned
+  attributes only fill unspecified gaps.
+
 - **Self-learning style profile** lives on `users.learnedStyleProfile` (jsonb).
   Every Enhance press, `geminiService.updateLearnedProfile` asks Grok to merge the
   current prompt into the profile (styles / physicalAttributes / themes / avoid).
