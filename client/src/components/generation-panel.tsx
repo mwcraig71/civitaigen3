@@ -1128,10 +1128,6 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
         }
       });
       
-      // Reset problematic state
-      setSelectedCharacter(null);
-      setSelectedScene(null);
-      
       // Collect current form data
       const currentPrompt = form.getValues('prompt') || '';
       

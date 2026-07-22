@@ -328,9 +328,13 @@ export class GeminiService {
     // Return a default response only if NEITHER engine is configured.
     // OpenRouter (Grok) is the primary engine; Gemini is the fallback.
     if (!openrouterClient && (!this.ai || !this.isConfigured)) {
+      const guarded = this.applyAgeSafetyGuards(
+        request.currentPrompt || 'masterpiece, best quality',
+        'worst quality, low quality, blurry'
+      );
       return {
-        enhancedPrompt: request.currentPrompt || 'masterpiece, best quality',
-        negativePrompt: 'worst quality, low quality, blurry',
+        enhancedPrompt: guarded.enhancedPrompt,
+        negativePrompt: guarded.negativePrompt,
         explanation: 'AI enhancement unavailable - no AI provider configured'
       };
     }
