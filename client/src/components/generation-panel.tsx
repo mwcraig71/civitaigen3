@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useWebSocket } from '@/hooks/use-websocket';
@@ -1067,6 +1068,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
 
   // AI Prompt Enhancement
   const [shotStyle, setShotStyle] = useState<'best' | 'candid'>('best');
+  const [enhanceDirection, setEnhanceDirection] = useState('');
   const aiEnhanceMutation = useMutation({
     mutationFn: async (request: any) => {
       console.log('📤 Sending AI enhancement request:', request);
@@ -1138,6 +1140,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
         currentPrompt,
         contentRating: 'explicit' as const,
         shotStyle,
+        enhanceDirection: enhanceDirection.trim() || undefined,
       };
       
       console.log('🤖 Enhancing prompt with AI (simplified)...', { 
@@ -2675,16 +2678,16 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                 name="prompt"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="flex items-center justify-between">
+                    <FormLabel className="flex flex-wrap items-center justify-between gap-y-2">
                       <span>Prompt</span>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-1.5 sm:gap-2">
                         <Dialog>
                           <DialogTrigger asChild>
                             <Button
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-7 px-2 text-xs text-slate-400 hover:text-white"
+                              className="h-8 px-2.5 text-xs text-slate-400 hover:text-white"
                               data-testid="button-load-prompt"
                             >
                               <Download className="h-3 w-3 mr-1" />
@@ -2743,7 +2746,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                           variant="ghost"
                           size="sm"
                           onClick={() => setShotStyle(shotStyle === 'best' ? 'candid' : 'best')}
-                          className={`h-7 px-2 text-xs ${shotStyle === 'candid' ? 'text-amber-400 hover:text-amber-300' : 'text-slate-400 hover:text-white'}`}
+                          className={`h-8 px-2.5 text-xs ${shotStyle === 'candid' ? 'text-amber-400 hover:text-amber-300' : 'text-slate-400 hover:text-white'}`}
                           title={shotStyle === 'candid'
                             ? 'Candid: enhance as an amateur, unposed snapshot (tap for Best Quality)'
                             : 'Best Quality: enhance as a polished professional shot (tap for Candid)'}
@@ -2757,7 +2760,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                           size="sm"
                           onClick={handleAIEnhance}
                           disabled={isAIEnhancing || aiEnhanceMutation.isPending}
-                          className="h-7 px-2 text-xs text-primary-400 hover:text-white hover:bg-primary-500/20"
+                          className="h-8 px-2.5 text-xs text-primary-400 hover:text-white hover:bg-primary-500/20"
                           data-testid="button-ai-enhance"
                         >
                           {isAIEnhancing || aiEnhanceMutation.isPending ? (
@@ -2772,7 +2775,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                           variant="ghost"
                           size="sm"
                           onClick={handleClearPrompt}
-                          className="h-7 px-2 text-xs text-slate-400 hover:text-white hover:bg-red-500/20"
+                          className="h-8 px-2.5 text-xs text-slate-400 hover:text-white hover:bg-red-500/20"
                           data-testid="button-clear-prompt"
                         >
                           <Trash2 className="h-3 w-3 mr-1" />
@@ -2783,12 +2786,37 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                     <FormControl>
                       <Textarea
                         placeholder="Describe the image you want to generate..."
-                        className="bg-dark-bg border-dark-border resize-none"
+                        className="bg-dark-bg border-dark-border resize-none text-base"
                         rows={8}
                         data-testid="textarea-prompt"
                         {...field}
                       />
                     </FormControl>
+                    <div className="relative mt-2">
+                      <Sparkles className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-purple-400 pointer-events-none" />
+                      <Input
+                        value={enhanceDirection}
+                        onChange={(e) => setEnhanceDirection(e.target.value)}
+                        placeholder="Optional: direct the AI Enhance (e.g. 'beach at sunset, playful mood')"
+                        className="bg-dark-bg border-dark-border pl-9 h-10 text-base placeholder:text-slate-500"
+                        maxLength={300}
+                        data-testid="input-enhance-direction"
+                      />
+                      {enhanceDirection && (
+                        <button
+                          type="button"
+                          onClick={() => setEnhanceDirection('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white p-1"
+                          aria-label="Clear enhance direction"
+                          data-testid="button-clear-enhance-direction"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      ✨ This tells AI Enhance what direction to take when it rewrites your prompt.
+                    </div>
                     <div className="text-sm text-slate-400 mt-2">
                       💡 Edit and add the freaky shit you're into to the prompt above, then hit generate!
                     </div>

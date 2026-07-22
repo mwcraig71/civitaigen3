@@ -51,6 +51,8 @@ export interface AIPromptRequest {
   /** 'best' = polished professional look (default); 'candid' = amateur snapshot look */
   shotStyle?: 'best' | 'candid';
   userInstructions?: string;
+  /** One-time direction for THIS enhancement press (e.g. "make it beach themed") */
+  enhanceDirection?: string;
   learnedProfile?: LearnedStyleProfile | null;
 }
 
@@ -323,12 +325,13 @@ export class GeminiService {
   }
 
   async generateEnhancedPrompt(request: AIPromptRequest): Promise<AIPromptResponse> {
-    // Return a default response if AI is not configured
-    if (!this.ai || !this.isConfigured) {
+    // Return a default response only if NEITHER engine is configured.
+    // OpenRouter (Grok) is the primary engine; Gemini is the fallback.
+    if (!openrouterClient && (!this.ai || !this.isConfigured)) {
       return {
-        enhancedPrompt: request.currentPrompt || 'score_9, score_8_up, score_7_up, score_6_up, masterpiece, best quality',
+        enhancedPrompt: request.currentPrompt || 'masterpiece, best quality',
         negativePrompt: 'worst quality, low quality, blurry',
-        explanation: 'AI enhancement unavailable - GEMINI_API_KEY not configured'
+        explanation: 'AI enhancement unavailable - no AI provider configured'
       };
     }
 
@@ -371,6 +374,10 @@ export class GeminiService {
         context += `Current Prompt: ${request.currentPrompt}\n`;
       }
 
+      const enhanceDirectionBlock = request.enhanceDirection && request.enhanceDirection.trim()
+        ? `\n\nENHANCEMENT DIRECTION FOR THIS REQUEST (highest priority — steer the enhancement this way):\n"""${request.enhanceDirection.trim().slice(0, 500)}"""\n`
+        : '';
+
       const userInstructionsBlock = request.userInstructions && request.userInstructions.trim()
         ? `\n\nUSER GENERAL INSTRUCTIONS (highest priority — always honor these unless they contradict a CRITICAL formatting rule below):\n"""${request.userInstructions.trim()}"""\n`
         : '';
@@ -406,7 +413,7 @@ CANDID SHOT MODE — this user wants an amateur, unpolished snapshot, NOT a prof
 - Everything else about the prompt (subject, character, setting, tag style) still follows the PONY MODEL PROMPT INFO — only the quality/polish language changes.`
         : '';
 
-      const metaPrompt = `${userInstructionsBlock}${learnedProfileBlock}${currentPromptBlock}
+      const metaPrompt = `${enhanceDirectionBlock}${userInstructionsBlock}${learnedProfileBlock}${currentPromptBlock}
 ${PONY_PROMPT_GUIDANCE}${shotStyleBlock}
 
 Improve the prompt above for the Pony image model. Follow the PONY MODEL PROMPT INFO for tag style and ordering${candid ? ' (but in CANDID SHOT MODE, skip its advice about quality tags — follow the candid rules instead)' : ''}, and weave in the user's LEARNED STYLE PROFILE where it fits naturally. Keep the core subject and intent of the current prompt intact — enrich it, don't replace it. Never add anything listed under "Avoid". The user's explicit directions (if any) take priority over the learned profile.
