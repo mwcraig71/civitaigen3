@@ -2885,7 +2885,7 @@ export default function FipFap() {
   const isDesktopView = typeof window !== 'undefined' && window.innerWidth > 1024;
 
   return (
-    <div className="h-screen overflow-hidden bg-black relative flex">
+    <div className="h-screen supports-[height:100dvh]:h-[100dvh] overflow-hidden bg-black relative flex">
       {/* Main Content Area */}
       <div className={`flex-1 h-full relative ${showStoryPanel && isDesktopView ? 'lg:pr-0' : ''}`}>
       {/* Search Interface */}
@@ -3250,7 +3250,7 @@ export default function FipFap() {
       {/* Skip 500 buttons - fixed position at bottom left */}
       {/* These skip by changing the database offset, not by caching all intermediate images */}
       {allImages.length > 0 && showUI && !showEnhanceModal && !showModifiersSheet && (
-        <div className="fixed bottom-4 left-4 flex items-center gap-3 z-[60]">
+        <div className="fixed left-4 flex items-center gap-3 z-[60]" style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))' }}>
           {/* Skip back 500 - jumps to new database offset without loading intermediate images */}
           <button
             onClick={() => {
@@ -3299,7 +3299,7 @@ export default function FipFap() {
 
       {/* Quick Rating Buttons for Admin */}
       {currentUser?.isAdmin && allImages.length > 0 && showUI && !showEnhanceModal && !showModifiersSheet && (
-        <div className="fixed bottom-14 left-4 flex gap-2 z-[60]">
+        <div className="fixed left-4 flex gap-2 z-[60]" style={{ bottom: 'calc(3.5rem + env(safe-area-inset-bottom, 0px))' }}>
           <Button
             onClick={() => handleQuickRating('PG')}
             size="sm"

@@ -321,7 +321,7 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
 
   return (
     <section 
-      className="relative w-full h-screen flex-shrink-0"
+      className="relative w-full h-screen supports-[height:100dvh]:h-[100dvh] flex-shrink-0"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onTouchMove={handleTouchMove}
@@ -430,7 +430,7 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
         </div>
 
         {/* Right action rail — TikTok-style vertical stack */}
-        <div className="absolute right-1.5 sm:right-4 bottom-28 sm:bottom-20 z-10 flex flex-col items-center gap-3">
+        <div className="absolute right-1.5 sm:right-4 bottom-[calc(7rem+env(safe-area-inset-bottom,0px))] sm:bottom-20 z-10 flex flex-col items-center gap-3">
           <button
             onClick={(e) => {
               e.stopPropagation();
