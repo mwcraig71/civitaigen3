@@ -58,4 +58,9 @@ defaultBucketID = "replit-objstore-50aec329-45e4-4d29-9714-7bfab7b3304c"
 
 [userenv.shared]
 ENCRYPTION_KEY = "bf822bc26057772534d975b300b02ed7e77717cff47dc19fa523dc698b1019d5"
+
+[userenv.development]
 APP_DOMAINS = "72bbe586-9bec-4142-8c99-fa9296ea5556-00-1zf6ihnub0nb2.janeway.replit.dev"
+
+[userenv.production]
+APP_DOMAINS = "civitaigen-3.replit.app"
