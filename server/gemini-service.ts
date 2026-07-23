@@ -300,10 +300,14 @@ export class GeminiService {
     let negative = (negativePrompt || '').trim();
 
     // Strip Pony/SD scoring tokens — these must never appear in the enhanced result.
+    // Also strip any tag containing "phone" or "camera": the image model draws a
+    // literal phone/camera into the picture instead of treating it as photo context.
     positive = positive
       .split(',')
       .map(t => t.trim())
       .filter(t => !/^score_9$|^score_8_up$/i.test(t))
+      .filter(t => !/\b(phone|camera|smartphone|selfie stick)\b/i.test(t))
+      .filter(t => t.length > 0)
       .join(', ');
 
     // Inject "18yo" at the front of the positive prompt if it's not already present.
