@@ -6,7 +6,7 @@ CiviVerse is a web-based AI image generation platform leveraging CivitAI's offic
 
 Preferred communication style: Simple, everyday language.
 Prompt structure preference (Pony models): quality tags, subject/character, scene, clothing, props, expressions, lighting, shot framing (e.g. extreme close-up photo), closing quality tags.
-Candid enhance prompts: never use the words "phone" or "camera" — use specific equipment/framing terms instead (ultra low angle photo, large aperture lens, zoom lens, extreme close-up photo).
+Enhance prompts (all modes, not just candid): never use the words "phone" or "camera" (e.g. "phone camera photo", "hand held camera") — the image model draws a literal phone/camera into the picture. Use specific equipment/framing terms instead (ultra low angle photo, large aperture lens, zoom lens, extreme close-up photo).
 
 # System Architecture
 

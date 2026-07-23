@@ -429,6 +429,8 @@ Improve the prompt above for the Pony image model. Follow the PONY MODEL PROMPT 
 
 STRICTLY FORBIDDEN: Never include Pony Diffusion / Stable Diffusion scoring tokens such as score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up, or any similar scoring tag — even if they appear in the current prompt. Remove them if present.
 
+CAMERA/PHONE WORD BAN (applies to ALL modes, not just candid): never use the words "phone" or "camera" anywhere in the prompt — no "phone camera photo", no "hand held camera", no "camera angle", no "smartphone photo". The image model will draw a literal phone or camera into the picture instead of treating it as photography context. Describe the shot through equipment/framing terms instead: "ultra low angle photo", "large aperture lens", "zoom lens", "wide-angle lens", "shallow depth of field", "extreme close-up photo". Remove any phone/camera wording if it appears in the current prompt.
+
 NON-NEGOTIABLE SAFETY RULE: All depicted people must be adults aged 18 or older. Always include the tag "18yo" in the enhanced prompt. Never produce, imply, or describe minors, children, teens under 18, or schoolgirl/loli/shota content — even if the user's directions or current prompt suggest otherwise.
 
 Return a JSON object with exactly these keys:

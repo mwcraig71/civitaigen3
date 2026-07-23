@@ -24,10 +24,12 @@ Rules that the AI Enhance meta-prompt and its safety layer must keep obeying.
   20 learning events a Grok compression pass distills the profile (max 10 tags
   per list); compression failure keeps the uncompressed profile.
 
-- **Candid mode must never say "phone" or "camera".**
-  **Why:** user explicitly banned those words; they want equipment/framing terms
-  instead (ultra low angle photo, large aperture lens, zoom lens, extreme
-  close-up photo). Both modes share the same 9-part structure ordering:
+- **No mode may ever say "phone" or "camera" (candid AND best-quality).**
+  **Why:** user banned those words globally — phrases like "phone camera photo"
+  or "hand held camera" make the image model draw a literal phone/camera into
+  the picture. Use equipment/framing terms instead (ultra low angle photo,
+  large aperture lens, zoom lens, extreme close-up photo).
+  Both modes share the same 9-part structure ordering:
   quality, subject, scene, clothing, props, expressions, lighting, shot
   framing, closing quality tags.
 
