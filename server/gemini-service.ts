@@ -10,8 +10,8 @@ import type { LearnedStyleProfile } from '@shared/schema';
 // NOT add them here (that's enforced separately in applyAgeSafetyGuards).
 const PONY_PROMPT_GUIDANCE = `PONY MODEL PROMPT INFO (this app generates on a Pony-family checkpoint — CyberRealistic Pony):
 - Write tags in booru/danbooru style: short, comma-separated tags rather than long prose sentences.
-- Follow this ordering: quality/detail tags first, then the subject/character, then physical attributes, then clothing/pose, then setting/background, then style/lighting/camera.
-- Use quality tags like "masterpiece, best quality, highly detailed, 8k" near the front.
+- Follow this exact prompt structure, in order: (1) quality tags, (2) subject/character with physical attributes, (3) scene/setting, (4) clothing, (5) props, (6) expressions, (7) lighting, (8) shot framing such as "extreme close-up photo" when the composition calls for it, (9) closing quality tags.
+- Use quality tags like "masterpiece, best quality, highly detailed, 8k" near the front, and reinforce with a short quality tag at the end.
 - Pony models respond well to a rating tag when appropriate (e.g. "rating_explicit" / "rating_questionable" / "rating_safe").
 - Emphasis uses parentheses with weights, e.g. "(green eyes:1.2)". Keep weights between 0.5 and 1.5.
 - Do NOT add the score_9 / score_8_up / score_7_up (etc.) tokens — the system adds those automatically.`;
@@ -412,9 +412,13 @@ CONFLICT RULE (critical): if the current prompt or the user's instructions expli
         ? `
 
 CANDID SHOT MODE — this user wants an amateur, unpolished snapshot, NOT a professional image:
-- Do NOT use quality/perfection tags: no "masterpiece", "best quality", "highly detailed", "8k", "4k", "ultra detailed", "professional photography", "studio lighting", "perfect", "flawless", "sharp focus", "award winning", or camera/lens jargon (DSLR, 85mm, bokeh, f/1.8).
-- Instead use candid qualities where they fit: "candid", "amateur photo", "snapshot", "phone camera photo", "unposed", "caught off guard", "natural lighting", "slightly grainy", "casual framing", "imperfect composition".
+- Do NOT use quality/perfection tags: no "masterpiece", "best quality", "highly detailed", "8k", "4k", "ultra detailed", "professional photography", "studio lighting", "perfect", "flawless", "sharp focus", "award winning".
+- NEVER use the words "phone" or "camera" anywhere in the prompt (no "phone camera photo", no "camera angle", no "handheld camera").
+- Instead describe the shot through specific photo-equipment and framing details: "ultra low angle photo", "large aperture lens", "zoom lens", "wide-angle lens", "shallow depth of field", "extreme close-up photo", and similar concrete equipment/framing terms.
+- Also use candid qualities where they fit: "candid", "amateur photo", "snapshot", "unposed", "caught off guard", "natural lighting", "slightly grainy", "casual framing", "imperfect composition".
+- Include "extreme close-up photo" when the composition focuses tightly on a subject detail.
 - The subject should feel like a real, unstaged moment. Keep hair/clothing/setting slightly imperfect and natural rather than idealized.
+- Still follow the same prompt structure ordering as best-quality mode: quality-feel tags (candid qualities here), subject, scene, clothing, props, expressions, lighting, shot framing (e.g. extreme close-up photo), closing tags.
 - Everything else about the prompt (subject, character, setting, tag style) still follows the PONY MODEL PROMPT INFO — only the quality/polish language changes.`
         : '';
 
