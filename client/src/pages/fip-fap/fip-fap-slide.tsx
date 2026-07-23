@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Heart, X, Download, EyeOff, Eye, Sparkles, Trash2, AlertTriangle, User, Edit3, FileText } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
@@ -41,6 +41,33 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
   const [selectedRating, setSelectedRating] = useState(image.rating || 'R');
   const [isCustomScene, setIsCustomScene] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+
+  // Report dialog state (controlled so touch taps can open it reliably on iOS)
+  const [isReportOpen, setIsReportOpen] = useState(false);
+
+  // iOS Safari sometimes fails to synthesize click events inside this
+  // swipe-gesture container, so action buttons fire directly on touchend.
+  const tapStartRef = useRef({ x: 0, y: 0 });
+  const makeTapHandlers = (fn: () => void) => ({
+    onClick: (e: React.MouseEvent) => {
+      e.stopPropagation();
+      fn();
+    },
+    onTouchStart: (e: React.TouchEvent) => {
+      e.stopPropagation();
+      tapStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      e.stopPropagation();
+      const t = e.changedTouches[0];
+      const dx = Math.abs(t.clientX - tapStartRef.current.x);
+      const dy = Math.abs(t.clientY - tapStartRef.current.y);
+      if (dx < 12 && dy < 12) {
+        e.preventDefault(); // suppress the follow-up synthetic click (avoids double-fire)
+        fn();
+      }
+    },
+  });
 
   // Upscale modal state
   const [showUpscaleModal, setShowUpscaleModal] = useState(false);
@@ -400,10 +427,7 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
               {/* Show edit button if user owns this image or is admin */}
               {currentUserId && (image.userId === currentUserId || isAdmin) && (
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsEditingCharacter(true);
-                  }}
+                  {...makeTapHandlers(() => setIsEditingCharacter(true))}
                   className="p-1 bg-black/50 hover:bg-black/70 rounded text-white/70 hover:text-white transition-colors"
                   data-testid={`button-edit-character-${image.id}`}
                 >
@@ -432,10 +456,7 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
         {/* Right action rail — TikTok-style vertical stack */}
         <div className="absolute right-1.5 sm:right-4 bottom-[calc(7rem+env(safe-area-inset-bottom,0px))] sm:bottom-20 z-10 flex flex-col items-center gap-3">
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onLike(image.id);
-            }}
+            {...makeTapHandlers(() => onLike(image.id))}
             className={`flex flex-col items-center gap-0.5 min-h-[44px] min-w-[44px] p-2 rounded-full bg-black/40 backdrop-blur-sm transition-transform active:scale-90 ${
               likedImages.has(image.id) ? 'text-red-500' : 'text-white'
             }`}
@@ -445,10 +466,7 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
             <span className="text-xs font-semibold">{image.likes || 0}</span>
           </button>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDownload(image);
-            }}
+            {...makeTapHandlers(() => onDownload(image))}
             className="flex flex-col items-center min-h-[44px] min-w-[44px] p-2 rounded-full bg-black/40 backdrop-blur-sm text-white transition-transform active:scale-90"
             title="Download"
             data-testid={`button-download-${image.id}`}
@@ -457,10 +475,7 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
           </button>
           {image.generationId && (
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleUpscaleClick();
-              }}
+              {...makeTapHandlers(() => handleUpscaleClick())}
               className="flex flex-col items-center min-h-[44px] min-w-[44px] p-2 rounded-full bg-black/40 backdrop-blur-sm text-white transition-transform active:scale-90"
               title="Upscale"
               data-testid={`button-upscale-${image.id}`}
@@ -481,10 +496,10 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
               <FileText className="h-6 w-6" />
             </button>
           )}
-          <AlertDialog>
+          <AlertDialog open={isReportOpen} onOpenChange={setIsReportOpen}>
             <AlertDialogTrigger asChild>
               <button
-                onClick={(e) => e.stopPropagation()}
+                {...makeTapHandlers(() => setIsReportOpen(true))}
                 className="flex flex-col items-center min-h-[44px] min-w-[44px] p-2 rounded-full bg-black/40 backdrop-blur-sm text-white/80 transition-transform active:scale-90"
                 title="Report"
                 data-testid={`button-delete-${image.id}`}
