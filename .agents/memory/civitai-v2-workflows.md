@@ -65,6 +65,10 @@ POST `{"workflowTemplate":"t","steps":[{"$type":"<guess>","input":{}}]}`. `Read 
 `schedule` valid: **discrete, karras, simple, exponential, ays, gits, sgm_uniform** (`normal`/`beta` rejected). Defaults: `discrete` for sd1/sdxl, `simple` for flux1.
 **Why:** sdcpp engine supports only a subset; map UI scheduler names (which include karras/exponential suffixes) onto these two fields. **How to apply:** see `mapSchedulerToSdCpp` in civitai-orchestration.ts.
 
+## Krea 2 checkpoints — comfy engine, not sdcpp
+
+baseModel "Krea 2" checkpoints are NOT sd1/sdxl/flux1 — submitting as sd1 wedges silently. Correct shape: `engine:"comfy"`, `ecosystem:"krea2"`, `model:"turbo"|"raw"` (pick by checkpoint name containing "turbo"), `operation:"createImage"`, checkpoint URN in **`diffusionModel`** (nullable), `sampler`/`scheduler` comfy enums (euler/simple OK), loras as `{urn:number}` map. Turbo defaults steps 8 / cfg 1 (clamp low); raw 28 / 4. Costs ~18 (turbo) / ~50 (raw) Buzz per image. Separately, `engine:"fal"`, `model:"krea2"` is Krea's hosted service — no checkpoints/LoRAs/negative prompts, aspectRatio instead of width/height. **How to apply:** any new baseModel family may need its own comfy ecosystem — check `https://orchestration.civitai.com/v2/consumer/recipes/imageGen/openapi.yaml` for `Comfy<Family>ImageGenInput` schemas before assuming sd1 fallback.
+
 ## whatif vs dryRun
 
 `?whatif=true` returns a real cost estimate (`transactions.list[].amount` buzz) + echoed input WITHOUT charging — use it to confirm a full payload is accepted before a paid submit. Dimensions need not be div-16 for whatif to pass, but round to 16 anyway per the documented constraint.

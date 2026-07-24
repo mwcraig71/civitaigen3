@@ -127,6 +127,8 @@ export interface Txt2ImgInput {
   negativePrompt?: string;
   modelArn: string;
   baseModel: string;
+  /** Checkpoint display name — used to pick the Krea 2 tier (turbo vs raw). */
+  modelName?: string;
   width?: number;
   height?: number;
   steps?: number;
@@ -522,6 +524,13 @@ export class CivitAIOrchestrationService {
    * sanitization before calling.
    */
   async submitTxt2Img(input: Txt2ImgInput, userApiKey?: string): Promise<OrchestrationSubmitResult> {
+    // Krea 2 checkpoints don't fit the sdcpp sd1/sdxl/flux1 discriminators —
+    // they run on the comfy engine with `ecosystem:"krea2"` and the checkpoint
+    // URN in `diffusionModel`. Submitting them as sd1 silently wedges forever.
+    const bmLower = (input.baseModel || "").toLowerCase();
+    if (bmLower.includes("krea")) {
+      return this.submitKrea2Txt2Img(input, userApiKey);
+    }
     const ecosystem = deriveImageEcosystem(input.baseModel, input.modelArn);
     const isFlux = ecosystem === "flux1";
     if (!input.baseModel || !input.baseModel.trim()) {
@@ -594,6 +603,67 @@ export class CivitAIOrchestrationService {
         steps: [{ $type: "imageGen", input: stepInput }],
       },
       `imageGen/createImage base=${input.baseModel} eco=${ecosystem}`,
+      userApiKey
+    );
+  }
+
+  /**
+   * Krea 2 community checkpoints run on the comfy engine:
+   * `engine:"comfy"`, `ecosystem:"krea2"`, `model:"turbo"|"raw"`, with the
+   * checkpoint AIR-URN in `diffusionModel` (nullable — omitting it uses the
+   * base Krea 2 weights). Verified via ?whatif=true: turbo ≈ 18 Buzz/img,
+   * raw ≈ 50 Buzz/img. Turbo tier wants low steps/CFG (defaults 8 / 1);
+   * raw behaves like a normal checkpoint (defaults 28 / 4).
+   */
+  private async submitKrea2Txt2Img(
+    input: Txt2ImgInput,
+    userApiKey?: string
+  ): Promise<OrchestrationSubmitResult> {
+    const isTurbo = (input.modelName || "").toLowerCase().includes("turbo");
+    const tier = isTurbo ? "turbo" : "raw";
+
+    const steps = isTurbo
+      ? Math.max(1, Math.min(input.steps ?? 8, 12))
+      : Math.max(1, Math.min(input.steps ?? 28, 50));
+    const cfgScale = isTurbo
+      ? Math.max(0, Math.min(input.cfgScale ?? 1, 2))
+      : Math.max(1, Math.min(input.cfgScale ?? 4, 10));
+    const width = roundDimensionTo16(input.width, 512, 2048);
+    const height = roundDimensionTo16(input.height, 512, 2048);
+
+    const loras: Record<string, number> = {};
+    if (input.loras) {
+      for (const lora of input.loras) {
+        loras[rewriteArnEcosystem(lora.id, "krea2")] = lora.strength;
+      }
+    }
+
+    const stepInput: any = {
+      engine: "comfy",
+      ecosystem: "krea2",
+      model: tier,
+      operation: "createImage",
+      prompt: input.prompt,
+      negativePrompt: input.negativePrompt || "",
+      width,
+      height,
+      steps,
+      cfgScale,
+      sampler: "euler",
+      scheduler: "simple",
+      quantity: Math.max(1, Math.min(input.quantity ?? 1, 12)),
+      loras,
+      diffusionModel: rewriteArnEcosystem(input.modelArn, "krea2"),
+    };
+    if (input.seed && input.seed > 0) stepInput.seed = input.seed;
+
+    return this.submitWorkflow(
+      {
+        workflowTemplate: "txt2img",
+        tags: ["image", "text-to-image", "Krea 2"],
+        steps: [{ $type: "imageGen", input: stepInput }],
+      },
+      `imageGen/createImage base=Krea 2 eco=krea2/${tier}`,
       userApiKey
     );
   }

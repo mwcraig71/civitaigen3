@@ -334,6 +334,7 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
             negativePrompt: safeNeg,
             modelArn: model.arn,
             baseModel: model.baseModel || "",
+            modelName: model.name,
             width: generationData.width,
             height: generationData.height,
             steps: generationData.steps,
