@@ -1135,7 +1135,15 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
             // deliverable". If a job ever produced >1 result and some were delivered,
             // we intentionally do NOT fast-fail (timer resets) and leave the rare
             // partial-dead case to the 35m cap rather than failing after partial delivery.
-            const DEAD_OUTPUT_MS = job.scheduled ? 300_000 : 30_000;
+            // While scheduled:true the job is still running on CivitAI's side and
+            // blobs legitimately stay `available:false` the whole time — comfy-engine
+            // jobs (Krea 2 etc.) run 3+ min per image, so a multi-image batch easily
+            // exceeds 5 minutes. Verified live: a Krea 2 turbo single image took ~3
+            // min with available:false throughout, then succeeded. Use a 20-min
+            // window while running (35-min hard cap still backstops), and keep the
+            // fast 30s window once the job is finished (scheduled:false) — that's
+            // the real dead-output/content-filter case.
+            const DEAD_OUTPUT_MS = job.scheduled ? 1_200_000 : 30_000;
             let deadOutput = false;
             let deadReason = "";
             if (availableBlobs === 0) {

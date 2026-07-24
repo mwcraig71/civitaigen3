@@ -69,6 +69,10 @@ POST `{"workflowTemplate":"t","steps":[{"$type":"<guess>","input":{}}]}`. `Read 
 
 baseModel "Krea 2" checkpoints are NOT sd1/sdxl/flux1 — submitting as sd1 wedges silently. Correct shape: `engine:"comfy"`, `ecosystem:"krea2"`, `model:"turbo"|"raw"` (pick by checkpoint name containing "turbo"), `operation:"createImage"`, checkpoint URN in **`diffusionModel`** (nullable), `sampler`/`scheduler` comfy enums (euler/simple OK), loras as `{urn:number}` map. Turbo defaults steps 8 / cfg 1 (clamp low); raw 28 / 4. Costs ~18 (turbo) / ~50 (raw) Buzz per image. Separately, `engine:"fal"`, `model:"krea2"` is Krea's hosted service — no checkpoints/LoRAs/negative prompts, aspectRatio instead of width/height. **How to apply:** any new baseModel family may need its own comfy ecosystem — check `https://orchestration.civitai.com/v2/consumer/recipes/imageGen/openapi.yaml` for `Comfy<Family>ImageGenInput` schemas before assuming sd1 fallback.
 
+## Comfy jobs keep blobs `available:false` for the entire run
+
+Comfy-engine jobs (Krea 2 etc.) report results with signed URLs but `available:false` from submit until completion — 3+ min per image, longer for batches. A dead-output heuristic must be lenient while `scheduled:true` (20-min window; 35-min hard cap backstops) and only fast-fail (30s) once `scheduled:false` — that's the true content-filter/dropped-output case. Verified live: Krea 2 turbo single image succeeded after ~3 min with available:false throughout.
+
 ## whatif vs dryRun
 
 `?whatif=true` returns a real cost estimate (`transactions.list[].amount` buzz) + echoed input WITHOUT charging — use it to confirm a full payload is accepted before a paid submit. Dimensions need not be div-16 for whatif to pass, but round to 16 anyway per the documented constraint.
