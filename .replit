@@ -52,14 +52,14 @@ stack = "FULLSTACK_JS"
 expertMode = true
 
 [objectStorage]
-defaultBucketID = "replit-objstore-50aec329-45e4-4d29-9714-7bfab7b3304c"
+defaultBucketID = "replit-objstore-fb7f5c1f-bfb3-497f-8031-56c7b99cd0ce"
 
 [userenv]
 
 [userenv.shared]
 ENCRYPTION_KEY = "bf822bc26057772534d975b300b02ed7e77717cff47dc19fa523dc698b1019d5"
-PRIVATE_OBJECT_DIR = "/replit-objstore-50aec329-45e4-4d29-9714-7bfab7b3304c/.private"
-PUBLIC_OBJECT_SEARCH_PATHS = "/replit-objstore-50aec329-45e4-4d29-9714-7bfab7b3304c/public"
+PRIVATE_OBJECT_DIR = "/replit-objstore-fb7f5c1f-bfb3-497f-8031-56c7b99cd0ce/.private"
+PUBLIC_OBJECT_SEARCH_PATHS = "/replit-objstore-fb7f5c1f-bfb3-497f-8031-56c7b99cd0ce/public"
 
 [userenv.development]
 APP_DOMAINS = "72bbe586-9bec-4142-8c99-fa9296ea5556-00-1zf6ihnub0nb2.janeway.replit.dev"
