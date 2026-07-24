@@ -254,9 +254,10 @@ export class CivitAIService {
       logger.info(`🎯 Found ${activationWords.length} activation words for ${civitaiModel.name}:`, activationWords);
     }
 
-    // Set LoRA strength ranges (most LoRAs work between -2 to 2)
-    const strengthMin = modelType === 'lora' ? -200 : -200; // -2.0 as int * 100
-    const strengthMax = modelType === 'lora' ? 200 : 200;   // 2.0 as int * 100
+    // LoRA strength range — allow the full -10 to +10 band; some LoRAs are
+    // designed for extreme weights (sliders/detail LoRAs especially).
+    const strengthMin = -1000; // -10.0 as int * 100
+    const strengthMax = 1000;  // 10.0 as int * 100
 
     return {
       id: `civitai-${civitaiModel.id}`,

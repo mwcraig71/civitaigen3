@@ -98,8 +98,8 @@ export const models = pgTable("models", {
   modelVersion: text("model_version"),
   arn: text("arn"), // AI Resource Identifier
   imageUrl: text("image_url"), // Cover image from CivitAI
-  strengthMin: integer("strength_min").default(-200), // LoRA strength range min (-2.0 as int * 100)
-  strengthMax: integer("strength_max").default(200), // LoRA strength range max (2.0 as int * 100)
+  strengthMin: integer("strength_min").default(-1000), // LoRA strength range min (-10.0 as int * 100)
+  strengthMax: integer("strength_max").default(1000), // LoRA strength range max (10.0 as int * 100)
   activationWords: json("activation_words").$type<string[]>(), // Trigger words for LoRAs
   creatorId: varchar("creator_id").references(() => users.id), // Model creator/uploader
   tags: json("tags").$type<string[]>(), // Model tags for categorization

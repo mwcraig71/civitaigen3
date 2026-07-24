@@ -160,8 +160,10 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
             {selectedLoras.map((lora) => {
               const model = getLoRAModel(lora.id);
               if (!model) return null;
-              const minStrength = (model.strengthMin || -200) / 100;
-              const maxStrength = (model.strengthMax || 200) / 100;
+              // Allow at least the full -10..+10 band; respect a per-LoRA
+              // stored range only when it's wider than that.
+              const minStrength = Math.min((model.strengthMin ?? -1000) / 100, -10);
+              const maxStrength = Math.max((model.strengthMax ?? 1000) / 100, 10);
               const activationWords = model.activationWords || [];
 
               return (
