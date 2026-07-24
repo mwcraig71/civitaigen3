@@ -13,7 +13,7 @@ export const generationSchema = z.object({
   prompt: z.string().min(1, "Prompt is required"),
   negativePrompt: z.string().optional(),
   seed: z.number().optional(),
-  seedIncrement: z.union([z.number().int().min(1).max(100), z.undefined()]).default(3),
+  seedIncrement: z.union([z.number().int().min(1).max(1000000), z.undefined()]).default(3),
   steps: z.number().min(1).max(150),
   cfgScale: z.number().min(1).max(30),
   width: z.number(),

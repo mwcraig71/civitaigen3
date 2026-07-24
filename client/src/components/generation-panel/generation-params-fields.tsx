@@ -138,8 +138,8 @@ export function GenerationParamsFields({
                                   const numValue = parseInt(value);
                                   if (isNaN(numValue) || numValue < 1) {
                                     field.onChange(1);
-                                  } else if (numValue > 100) {
-                                    field.onChange(100);
+                                  } else if (numValue > 1000000) {
+                                    field.onChange(1000000);
                                   }
                                 }
                               }}

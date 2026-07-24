@@ -303,8 +303,10 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
       // Submit individual requests for each image
       for (let i = 0; i < quantity; i++) {
         // Each image gets a fully independent random seed unless the user pinned one
+        // Wrap into int32 range so large increments can't overflow the DB
+        // column or CivitAI's seed field.
         const imageSeed = userPinnedSeed
-          ? (baseSeed as number) + (i * seedIncrement)
+          ? ((baseSeed as number) + (i * seedIncrement)) % 2147483647
           : Math.floor(Math.random() * 2147483647);
         // The civitaiRequest is retained for the BatchPoller (it reads params to
         // persist generation/regeneration metadata). Carry the sanitized prompts
@@ -436,7 +438,7 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
 
       for (let i = 0; i < quantity; i++) {
         const imageSeed = diffusUserPinnedSeed
-          ? (diffusBaseSeed as number) + (i * diffusSeedIncrement)
+          ? ((diffusBaseSeed as number) + (i * diffusSeedIncrement)) % 2147483647
           : Math.floor(Math.random() * 2147483647);
         
         const diffusRequest = {
