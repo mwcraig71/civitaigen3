@@ -317,16 +317,30 @@ export class CivitAIOrchestrationService {
     const contentType = fetchRes.headers.get("content-type") || "image/png";
     const buf = Buffer.from(await fetchRes.arrayBuffer());
 
-    // Push it into CivitAI's blob store.
-    const upRes = await fetch(`${ORCHESTRATION_BASE}/v2/consumer/blobs`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": contentType,
-      },
-      body: buf,
-    });
-    const upText = await upRes.text();
+    // Push it into CivitAI's blob store. Their blob endpoint intermittently
+    // returns 5xx (often with an empty body) under load, same as the workflows
+    // endpoint — a bounded retry is safe because a failed upload creates nothing.
+    const MAX_UPLOAD_ATTEMPTS = 3;
+    let upRes!: Response;
+    let upText = "";
+    for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+      upRes = await fetch(`${ORCHESTRATION_BASE}/v2/consumer/blobs`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": contentType,
+        },
+        body: buf,
+      });
+      upText = await upRes.text();
+      if (upRes.ok || upRes.status < 500) break;
+      logger.warn(
+        `⚠️ CivitAI blob upload attempt ${attempt}/${MAX_UPLOAD_ATTEMPTS} failed with ${upRes.status} — ${attempt < MAX_UPLOAD_ATTEMPTS ? "retrying" : "giving up"}`
+      );
+      if (attempt < MAX_UPLOAD_ATTEMPTS) {
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      }
+    }
     if (!upRes.ok) {
       throw new Error(`CivitAI blob upload failed ${upRes.status}: ${upText.slice(0, 200)}`);
     }
