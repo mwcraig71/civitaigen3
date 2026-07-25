@@ -563,12 +563,12 @@ export class CivitAIOrchestrationService {
     // flux1 is additionally limited to 832–1216).
     const steps = isFlux
       ? Math.max(20, Math.min(input.steps ?? 28, 50))
-      : Math.max(1, Math.min(input.steps ?? 30, 150));
+      : Math.max(1, Math.min(input.steps ?? 30, 200));
     const cfgScale = isFlux
       ? Math.max(1.0, Math.min(input.cfgScale ?? 3.5, 4.5))
       : Math.max(1, Math.min(input.cfgScale ?? 7, 20));
-    const width = roundDimensionTo16(input.width, isFlux ? 832 : 512, isFlux ? 1216 : 1536);
-    const height = roundDimensionTo16(input.height, isFlux ? 832 : 512, isFlux ? 1216 : 1536);
+    const width = roundDimensionTo16(input.width, isFlux ? 832 : 512, isFlux ? 1216 : 2048);
+    const height = roundDimensionTo16(input.height, isFlux ? 832 : 512, isFlux ? 1216 : 2048);
     const quantity = Math.max(1, Math.min(input.quantity ?? 1, isFlux ? 4 : 12));
 
     const stepInput: any = {
@@ -624,7 +624,7 @@ export class CivitAIOrchestrationService {
 
     const steps = isTurbo
       ? Math.max(1, Math.min(input.steps ?? 8, 12))
-      : Math.max(1, Math.min(input.steps ?? 28, 50));
+      : Math.max(1, Math.min(input.steps ?? 28, 100));
     const cfgScale = isTurbo
       ? Math.max(0, Math.min(input.cfgScale ?? 1, 2))
       : Math.max(1, Math.min(input.cfgScale ?? 4, 10));

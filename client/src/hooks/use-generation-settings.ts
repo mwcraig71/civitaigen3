@@ -14,7 +14,7 @@ export const generationSchema = z.object({
   negativePrompt: z.string().optional(),
   seed: z.number().optional(),
   seedIncrement: z.union([z.number().int().min(1).max(1000000), z.undefined()]).default(3),
-  steps: z.number().min(1).max(150),
+  steps: z.number().min(1).max(200),
   cfgScale: z.number().min(1).max(30),
   width: z.number(),
   height: z.number(),

@@ -233,6 +233,10 @@ export function GenerationParamsFields({
                               <SelectItem value="832">832</SelectItem>
                               <SelectItem value="1024">1024</SelectItem>
                               <SelectItem value="1216">1216</SelectItem>
+                              <SelectItem value="1320">1320</SelectItem>
+                              <SelectItem value="1536">1536</SelectItem>
+                              <SelectItem value="1984">1984</SelectItem>
+                              <SelectItem value="2048">2048</SelectItem>
                             </SelectContent>
                           </Select>
                           <FormMessage />
@@ -256,6 +260,10 @@ export function GenerationParamsFields({
                               <SelectItem value="832">832</SelectItem>
                               <SelectItem value="1024">1024</SelectItem>
                               <SelectItem value="1216">1216</SelectItem>
+                              <SelectItem value="1320">1320</SelectItem>
+                              <SelectItem value="1536">1536</SelectItem>
+                              <SelectItem value="1984">1984</SelectItem>
+                              <SelectItem value="2048">2048</SelectItem>
                             </SelectContent>
                           </Select>
                           <FormMessage />

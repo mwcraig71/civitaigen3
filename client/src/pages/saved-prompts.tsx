@@ -27,7 +27,7 @@ const createSavedPromptSchema = z.object({
   imageUrl: z.string().optional(),
   tags: z.array(z.string()).default([]),
   baseModel: z.string().optional(),
-  steps: z.number().min(1).max(150).optional(),
+  steps: z.number().min(1).max(200).optional(),
   cfgScale: z.number().min(1).max(20).optional(),
   seed: z.number().optional(),
   loras: z.array(z.object({ id: z.string(), strength: z.number() })).default([]),
