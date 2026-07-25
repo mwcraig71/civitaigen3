@@ -1451,7 +1451,31 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
         
         console.log(`📨 WebSocket progress update for batch ${batchId}: ${wsProgress}%`);
         
-        if (wsProgress === 100 || lastMessage.status === 'completed') {
+        if (lastMessage.status === 'failed') {
+          // Dead-output / content-filter failure sent by the batch poller
+          console.log(`❌ generation_update failed for ${batchId}`);
+          setActiveGenerations(prev => {
+            const updated = new Map(prev);
+            updated.delete(batchId);
+            saveActiveGenerationsToStorage(updated);
+            return updated;
+          });
+          setPendingImagePlaceholders(prev => {
+            const updated = new Map(prev);
+            updated.delete(batchId);
+            return updated;
+          });
+          if (currentGeneration && currentGeneration.id === batchId) {
+            setCurrentGeneration(null);
+            setProgress(0);
+          }
+          const failMsg = (lastMessage as any).message as string | undefined;
+          toast({
+            title: "Generation Failed",
+            description: failMsg || "CivitAI didn't return an image. Try adjusting your prompt and generate again.",
+            variant: "destructive",
+          });
+        } else if (wsProgress === 100 || lastMessage.status === 'completed') {
           setActiveGenerations(prev => {
             const updated = new Map(prev);
             const existing = updated.get(batchId);
@@ -1771,10 +1795,11 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
           return updated;
         });
         
-        // Show error toast
+        // Show error toast — use the server's actual error message when available
+        const serverError = (lastMessage as any).error as string | undefined;
         toast({
           title: "Generation Failed",
-          description: "Image generation encountered an error. Please check your settings and try again.",
+          description: serverError || "Image generation encountered an error. Please check your settings and try again.",
           variant: "destructive",
         });
       }
