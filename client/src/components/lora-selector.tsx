@@ -9,6 +9,7 @@ import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Model } from '@/types';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -32,6 +33,7 @@ interface LoRASelectorProps {
 export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWordClick }: LoRASelectorProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [tab, setTab] = useState<'favorites' | 'all'>('favorites');
+  const [baseModelFilter, setBaseModelFilter] = useState<string>('all');
   const [selectedTriggerWords, setSelectedTriggerWords] = useState<Set<string>>(new Set());
   const { toast } = useToast();
 
@@ -80,10 +82,22 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
 
   const selectedIds = useMemo(() => new Set(selectedLoras.map((l) => l.id)), [selectedLoras]);
 
+  // Distinct base models present among LoRAs (for the filter dropdown)
+  const baseModelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of loraModels) {
+      if (m.baseModel) set.add(m.baseModel);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [loraModels]);
+
   // Search always looks at the active tab's pool; favorites sort first in "All".
   const filteredLoras = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    const pool = tab === 'favorites' ? loraModels.filter((m) => favoriteModelIds.has(m.id)) : loraModels;
+    let pool = tab === 'favorites' ? loraModels.filter((m) => favoriteModelIds.has(m.id)) : loraModels;
+    if (baseModelFilter !== 'all') {
+      pool = pool.filter((m) => m.baseModel === baseModelFilter);
+    }
     const matches = q === ''
       ? pool
       : pool.filter(
@@ -98,7 +112,7 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
       if (favDiff !== 0) return favDiff;
       return a.name.localeCompare(b.name);
     });
-  }, [loraModels, favoriteModelIds, searchTerm, tab]);
+  }, [loraModels, favoriteModelIds, searchTerm, tab, baseModelFilter]);
 
   const addLoRA = (loraId: string) => {
     if (selectedIds.has(loraId)) return;
@@ -292,6 +306,22 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+            <Select value={baseModelFilter} onValueChange={setBaseModelFilter}>
+              <SelectTrigger
+                className="h-9 flex-1 min-w-0 bg-dark-bg border-dark-border text-xs"
+                data-testid="select-lora-base-model-filter"
+              >
+                <SelectValue placeholder="All base models" />
+              </SelectTrigger>
+              <SelectContent className="max-h-[300px]">
+                <SelectItem value="all">All base models</SelectItem>
+                {baseModelOptions.map((bm) => (
+                  <SelectItem key={bm} value={bm} data-testid={`filter-base-model-${bm}`}>
+                    {bm}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="relative">
