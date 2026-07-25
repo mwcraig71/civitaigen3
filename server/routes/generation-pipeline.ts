@@ -29,6 +29,101 @@ import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateIm
 
 import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
 
+/**
+ * Translate a raw server/CivitAI error into a specific, actionable message the
+ * user can act on immediately. Covers every known failure mode.
+ */
+function friendlyGenerationError(raw: string): string {
+  const m = raw.toLowerCase();
+
+  // ── CivitAI content-policy / TOS blocks ──────────────────────────────────
+  if (m.includes("real person") || m.includes("real-person")) {
+    return (
+      "CivitAI detected a real person's name in your prompt and blocked it. " +
+      "Remove any celebrity names, person-specific LoRA trigger words (e.g. c2n0n), " +
+      "or <lora:PersonName> tags and try again."
+    );
+  }
+  if (
+    m.includes("violate tos") ||
+    m.includes("violate the tos") ||
+    m.includes("prompt blocked") ||
+    m.includes("content policy") ||
+    m.includes("not allowed") ||
+    m.includes("prohibited")
+  ) {
+    return (
+      "Your prompt was blocked by CivitAI's content filter. Common causes: " +
+      "celebrity or real-person names, underage references, or platform-prohibited terms. " +
+      "Edit the prompt to remove those terms and try again."
+    );
+  }
+
+  // ── Our own underage-content guard ───────────────────────────────────────
+  if (m.includes("content policy violation") || m.includes("generation blocked")) {
+    const detail = raw.replace(/^Content policy violation detected\. Generation blocked\.\s*Details:\s*/i, "");
+    return `Generation blocked by content guard: ${detail}. Remove underage or prohibited references from your prompt.`;
+  }
+
+  // ── Buzz / credits ────────────────────────────────────────────────────────
+  if (m.includes("insufficientbuzz") || m.includes("insufficient buzz") || m.includes("not enough buzz")) {
+    return (
+      "Not enough Buzz credits to generate this image. " +
+      "Add more credits on civitai.com, or reduce the number of images / steps to lower the cost."
+    );
+  }
+
+  // ── Rate limiting ─────────────────────────────────────────────────────────
+  if (m.includes("rate limit") || m.includes("too many requests") || raw.includes("429")) {
+    return "CivitAI is rate-limiting your account right now. Wait 1–2 minutes and try again.";
+  }
+
+  // ── CivitAI server errors ─────────────────────────────────────────────────
+  if (m.includes("temporarily unavailable") || m.includes("http 5") || m.includes("503") || m.includes("502")) {
+    return "CivitAI's servers are temporarily overloaded. Wait a minute and try again.";
+  }
+
+  // ── Source image problems (img2img) ───────────────────────────────────────
+  if (m.includes("source image") || m.includes("blob upload") || m.includes("failed to fetch source")) {
+    return (
+      "The source image couldn't be uploaded to CivitAI. " +
+      "Make sure the image is a valid JPEG/PNG and try again. " +
+      "If the problem persists, save the image locally and re-upload it."
+    );
+  }
+  if (m.includes("private") || m.includes("reserved address") || m.includes("private ip")) {
+    return "The source image URL points to a private/internal address and can't be used. Use a publicly accessible image URL.";
+  }
+
+  // ── Model / config errors ─────────────────────────────────────────────────
+  if (m.includes("no derived type") || m.includes("unrecognized type") || m.includes("invalid ecosystem")) {
+    return (
+      "The selected model isn't compatible with the generation settings. " +
+      "Try re-selecting the model from the list, or switch to a different checkpoint."
+    );
+  }
+  if (m.includes("workflow returned no id") || m.includes("invalid json")) {
+    return "CivitAI returned an unexpected response. Try again — if it keeps happening, the model may be temporarily unavailable.";
+  }
+
+  // ── Network / connectivity ────────────────────────────────────────────────
+  if (m.includes("econnrefused") || m.includes("enotfound") || m.includes("network") || m.includes("fetch failed")) {
+    return "Couldn't reach CivitAI — check your internet connection and try again.";
+  }
+
+  // ── Silent blob failure (dead output from poller) ─────────────────────────
+  if (m.includes("blob") && (m.includes("unavailable") || m.includes("not available"))) {
+    return (
+      "CivitAI processed the job but didn't return an image. " +
+      "This usually means the prompt was silently blocked by their NSFW filter. " +
+      "Try softening explicit terms, removing LoRA trigger words one at a time, or switching to a different checkpoint."
+    );
+  }
+
+  // ── Fallback: return the raw message so at least it's visible ────────────
+  return raw;
+}
+
   // Image enhancement processing with Replicate
   async function processEnhancements(enhancements: any[], generations: any[]) {
     const replicate = new Replicate({
@@ -386,11 +481,12 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
       });
       
       await storage.updateGenerationStatus(generationId, "failed");
+      const rawMsg = error instanceof Error ? error.message : "Unknown error";
       broadcastToUser(userId, {
         type: "generation_error",
         generationId,
         status: "failed",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: friendlyGenerationError(rawMsg)
       });
     }
   }
@@ -494,11 +590,12 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
       });
       
       await storage.updateGenerationStatus(generationId, "failed");
+      const rawDiffusMsg = error instanceof Error ? error.message : "Unknown error";
       broadcastToUser(userId, {
         type: "generation_error",
         generationId,
         status: "failed",
-        error: error instanceof Error ? error.message : "Unknown error"
+        error: friendlyGenerationError(rawDiffusMsg)
       });
     }
   }
@@ -1211,7 +1308,7 @@ import { eq, and, batchTracker, broadcastToUser, clients } from "./context";
                   if (batchTracker.has(generationId)) batchTracker.delete(generationId);
                 } catch (e) { logger.error(`Failed to mark generation ${generationId} as failed:`, e); }
                 for (const userId of pollerInfo.users) {
-                  broadcastToUser(userId, { type: "generation_update", generationId, status: "failed", progress: 0, message: "CivitAI didn't return an image — this usually means the prompt was blocked by CivitAI's content filters. Try adjusting your prompt and generate again." });
+                  broadcastToUser(userId, { type: "generation_update", generationId, status: "failed", progress: 0, message: friendlyGenerationError("blobs not available — silent content filter block") });
                 }
               }
               this.cleanup(token);
