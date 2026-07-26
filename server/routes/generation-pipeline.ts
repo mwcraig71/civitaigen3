@@ -1198,18 +1198,45 @@ function friendlyGenerationError(raw: string): string {
           }
 
           if (job.result && Array.isArray(job.result) && job.result.length > 0) {
-            // A result is deliverable ONLY when CivitAI marks it `available === true`.
-            // CivitAI often returns a result carrying a signed blob URL while
-            // `available` stays false — but that URL is DEAD (the blob 404s). This
-            // happens when CivitAI silently drops the output (e.g. content blocked
-            // by its filters). So the presence of a URL is NOT proof of readiness;
-            // only `available === true` is. Jobs whose blobs never become available
-            // are handled by the dead-output terminal failure below.
+            // Primary readiness signal: CivitAI's `available === true` flag.
+            // However, CivitAI's v2 orchestration endpoint (orchestration-new.civitai.com)
+            // now permanently returns `available: false` even for fully deliverable images
+            // with year-long signed URLs. When ALL blobs show `available: false` but carry
+            // real URLs, we probe one with a HEAD request every ~10 poll cycles to check
+            // whether it actually returns HTTP 200. If it does, we treat all URL-bearing
+            // blobs as ready (override the flag). If it 404s, we fall through to the
+            // existing dead-output timer logic — content-filtered images that never deliver.
             const isResultReady = (r: any) => r.available === true;
 
             // Count total vs available blobs for better tracking
             const totalBlobs = job.result.length;
-            const availableBlobs = job.result.filter(isResultReady).length;
+            let availableBlobs = job.result.filter(isResultReady).length;
+
+            // HEAD probe: when no blobs are flagged available but URLs are present,
+            // verify the URL is actually reachable every ~10 attempts.
+            if (availableBlobs === 0 && pollerInfo.attempts % 10 === 1) {
+              const firstWithUrl = job.result.find((r: any) => r.blobUrl || r.url);
+              const probeUrl = firstWithUrl?.blobUrl || firstWithUrl?.url;
+              if (probeUrl) {
+                try {
+                  const headResp = await fetch(probeUrl, { method: "HEAD", signal: AbortSignal.timeout(8000) });
+                  if (headResp.ok) {
+                    // The URL is live — CivitAI's flag is wrong; treat all URL-bearing blobs as available.
+                    logger.info(`✅ HEAD probe returned ${headResp.status} — overriding available:false for all URL-bearing blobs`);
+                    job.result = job.result.map((r: any) => {
+                      const hasUrl = r.blobUrl || r.url || r.videoUrl;
+                      return hasUrl ? { ...r, available: true } : r;
+                    });
+                    availableBlobs = job.result.filter(isResultReady).length;
+                  } else {
+                    logger.info(`🔍 HEAD probe returned ${headResp.status} — blob URL not yet live (available:false is accurate)`);
+                  }
+                } catch (probeErr) {
+                  logger.info(`🔍 HEAD probe failed (${probeErr instanceof Error ? probeErr.message : probeErr}) — treating as unavailable`);
+                }
+              }
+            }
+
             logger.info(`📊 Blob availability: ${availableBlobs}/${totalBlobs} ready (waiting for CivitAI blob storage)`);
             
             // Debug: Log full result structure to diagnose issues
