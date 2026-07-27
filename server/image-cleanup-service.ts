@@ -1,8 +1,9 @@
 import { db } from "./db";
 import { logger } from "./logger";
-import { sharedImages, userSharedImageLikes, users, generations } from "@shared/schema";
+import { sharedImages, userSharedImageLikes, users, generations, sourceUploads } from "@shared/schema";
 import { eq, and, lt, inArray, isNull, sql, notInArray } from "drizzle-orm";
 import { ObjectStorageService, parseObjectPath, objectStorageClient } from "./objectStorage";
+import { storage } from "./storage";
 
 const objectStorageService = new ObjectStorageService();
 
@@ -243,5 +244,39 @@ async function deleteStorageFile(fileUrl: string): Promise<DeleteResult> {
 export const RETENTION_POLICY = {
   sharedImagesDays: RETENTION_DAYS.SHARED_IMAGES,
   privateGenerationsDays: RETENTION_DAYS.PRIVATE_GENERATIONS,
-  description: `Images shared to the community are retained for ${RETENTION_DAYS.SHARED_IMAGES} days (1 year). Private generations not shared to the community are retained for ${RETENTION_DAYS.PRIVATE_GENERATIONS} days.`,
+  sourceUploadsDays: 5,
+  description: `Images shared to the community are retained for ${RETENTION_DAYS.SHARED_IMAGES} days (1 year). Private generations not shared to the community are retained for ${RETENTION_DAYS.PRIVATE_GENERATIONS} days. Source uploads (img2img/img2vid) are retained for 5 days.`,
 };
+
+// ---------------------------------------------------------------------------
+// Source-upload expiry cleanup — runs separately from the main image cleanup.
+// ---------------------------------------------------------------------------
+export async function runSourceUploadCleanup(dryRun: boolean = false): Promise<{ deleted: number; storageFilesDeleted: number; errors: string[] }> {
+  const result = { deleted: 0, storageFilesDeleted: 0, errors: [] as string[] };
+  try {
+    const expired = await storage.getExpiredSourceUploads();
+    logger.info(`🧹 Source upload cleanup: ${expired.length} expired records (dryRun: ${dryRun})`);
+    for (const upload of expired) {
+      try {
+        if (!dryRun) {
+          // Delete object storage file
+          try {
+            const { bucketName, objectName } = parseObjectPath(upload.objectPath);
+            const file = objectStorageClient.bucket(bucketName).file(objectName);
+            const [exists] = await file.exists();
+            if (exists) { await file.delete(); result.storageFilesDeleted++; }
+          } catch (e) {
+            logger.warn(`⚠️ Could not delete source upload file ${upload.objectPath}:`, e);
+          }
+          await storage.deleteSourceUpload(upload.id);
+        }
+        result.deleted++;
+      } catch (e) {
+        result.errors.push(`Failed to delete source upload ${upload.id}: ${(e as Error).message}`);
+      }
+    }
+  } catch (e) {
+    result.errors.push(`Source upload cleanup failed: ${(e as Error).message}`);
+  }
+  return result;
+}

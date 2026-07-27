@@ -63,6 +63,7 @@ import { registerEventsRoutes } from "./events";
 import { registerStoryRoutes } from "./story";
 import { registerApiKeysRoutes } from "./api-keys";
 import { registerBotsRoutes } from "./bots";
+import { registerAdminUploadsRoutes } from "./admin-uploads";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
@@ -501,6 +502,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerStoryRoutes(app, ctx);
   registerApiKeysRoutes(app, ctx);
   registerBotsRoutes(app, ctx);
+  registerAdminUploadsRoutes(app, ctx);
 
   return httpServer;
 }

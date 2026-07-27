@@ -1319,3 +1319,25 @@ export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
 });
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+
+// Source image uploads — tracks images users upload for img2img / img2vid.
+// Retained for 5 days then purged (object storage file + DB row).
+export const sourceUploads = pgTable("source_uploads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id).notNull(),
+  objectPath: text("object_path").notNull(), // durable path in Replit Object Storage
+  generationType: text("generation_type").notNull(), // 'img2img' | 'img2vid'
+  generationId: varchar("generation_id"),              // linked generation (set after job starts)
+  uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),        // uploadedAt + 5 days
+}, (table) => [
+  index("idx_source_uploads_user_id").on(table.userId),
+  index("idx_source_uploads_expires_at").on(table.expiresAt),
+]);
+
+export const insertSourceUploadSchema = createInsertSchema(sourceUploads).omit({
+  id: true,
+  uploadedAt: true,
+});
+export type SourceUpload = typeof sourceUploads.$inferSelect;
+export type InsertSourceUpload = z.infer<typeof insertSourceUploadSchema>;

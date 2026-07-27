@@ -166,6 +166,21 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
         }
       }
 
+      // Record the source image upload for admin visibility (5-day retention).
+      let sourceUploadId: string | undefined;
+      if (parsed.sourceImageObjectPath) {
+        try {
+          const su = await storage.createSourceUpload({
+            userId,
+            objectPath: parsed.sourceImageObjectPath,
+            generationType: parsed.mode,
+          });
+          sourceUploadId = su.id;
+        } catch (e) {
+          logger.warn("⚠️ Failed to record source upload:", e);
+        }
+      }
+
       // Persist generation row immediately so the user sees it in their gallery.
       const generation = await storage.createGeneration({
         userId,
@@ -186,6 +201,11 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
         sourceImageUrl: parsed.sourceImageObjectPath || parsed.sourceImageUrl,
         denoiseStrength: Math.round((parsed.denoiseStrength ?? 0.5) * 100),
       } as any);
+
+      // Link the source upload record to this generation now that we have the ID.
+      if (sourceUploadId) {
+        storage.linkSourceUploadToGeneration(sourceUploadId, generation.id).catch(() => {});
+      }
 
       // Attach video metadata fields up-front for img2vid so the UI can
       // render the right preview shell while polling.

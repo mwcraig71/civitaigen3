@@ -1,10 +1,10 @@
-import { type User, type InsertUser, type UpsertUser, type Model, type InsertModel, type Generation, type InsertGeneration, type Favorite, type InsertFavorite, type Character, type InsertCharacter, type CharacterPreset, type InsertCharacterPreset, type QualityGroup, type InsertQualityGroup, type SceneData, type InsertSceneData, type SavedScene, type InsertSavedScene, type SavedPrompt, type InsertSavedPrompt, type SharedImage, type InsertSharedImage, type ModelLike, type SignupPromotion, type InsertSignupPromotion, type UserSignupBonus, type InsertUserSignupBonus, type ContentReport, type InsertContentReport, type ModerationAction, type InsertModerationAction, type CreditPackage, type InsertCreditPackage, type CreditTransaction, type InsertCreditTransaction, type PlatformSetting, type InsertPlatformSetting, type UserFeedback, type InsertUserFeedback, type Notification, type BannedEmail, type InsertBannedEmail, type UserSharedImageLike, type InsertUserSharedImageLike, type ErrorLog, type InsertErrorLog, type Event, type InsertEvent, type EventStep, type InsertEventStep, type FavoritePromptWord, type InsertFavoritePromptWord, type UserPreferences, type InsertUserPreferences, type SystemSettings, type InsertSystemSettings, type EnhancedImage, type InsertEnhancedImage, type TrackingSession, type InsertTrackingSession, type TrackingEvent, type InsertTrackingEvent, type SanitizationRule, type InsertSanitizationRule, type ApiKey, type InsertApiKey } from "@shared/schema";
+import { type User, type InsertUser, type UpsertUser, type Model, type InsertModel, type Generation, type InsertGeneration, type Favorite, type InsertFavorite, type Character, type InsertCharacter, type CharacterPreset, type InsertCharacterPreset, type QualityGroup, type InsertQualityGroup, type SceneData, type InsertSceneData, type SavedScene, type InsertSavedScene, type SavedPrompt, type InsertSavedPrompt, type SharedImage, type InsertSharedImage, type ModelLike, type SignupPromotion, type InsertSignupPromotion, type UserSignupBonus, type InsertUserSignupBonus, type ContentReport, type InsertContentReport, type ModerationAction, type InsertModerationAction, type CreditPackage, type InsertCreditPackage, type CreditTransaction, type InsertCreditTransaction, type PlatformSetting, type InsertPlatformSetting, type UserFeedback, type InsertUserFeedback, type Notification, type BannedEmail, type InsertBannedEmail, type UserSharedImageLike, type InsertUserSharedImageLike, type ErrorLog, type InsertErrorLog, type Event, type InsertEvent, type EventStep, type InsertEventStep, type FavoritePromptWord, type InsertFavoritePromptWord, type UserPreferences, type InsertUserPreferences, type SystemSettings, type InsertSystemSettings, type EnhancedImage, type InsertEnhancedImage, type TrackingSession, type InsertTrackingSession, type TrackingEvent, type InsertTrackingEvent, type SanitizationRule, type InsertSanitizationRule, type ApiKey, type InsertApiKey, type SourceUpload } from "@shared/schema";
 import { logger } from "./logger";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { db } from "./db";
 import { eq, desc, and, ilike, sql, ne, or, gte, lt, like, count, sum, isNull, isNotNull, inArray } from "drizzle-orm";
-import { users, models, generations, favorites, characters, characterPresets, qualityGroups, sceneData, savedScenes, savedPrompts, sharedImages, modelLikes, signupPromotions, userSignupBonuses, contentReports, moderationActions, creditPackages, creditTransactions, platformSettings, userFeedback, notifications, bannedEmails, userSharedImageLikes, errorLogs, events, eventSteps, favoritePromptWords, userPreferences, systemSettings, enhancedImages, trackingSessions, trackingEvents, sanitizationRules, apiKeys } from "@shared/schema";
+import { users, models, generations, favorites, characters, characterPresets, qualityGroups, sceneData, savedScenes, savedPrompts, sharedImages, modelLikes, signupPromotions, userSignupBonuses, contentReports, moderationActions, creditPackages, creditTransactions, platformSettings, userFeedback, notifications, bannedEmails, userSharedImageLikes, errorLogs, events, eventSteps, favoritePromptWords, userPreferences, systemSettings, enhancedImages, trackingSessions, trackingEvents, sanitizationRules, apiKeys, sourceUploads } from "@shared/schema";
 import { objectStorageClient, parseObjectPath } from "./objectStorage";
 import { evaluateClaim, effectiveStreak, rewardForStreak, generateReferralCode, REFERRAL_REWARD_REFERRER, REFERRAL_REWARD_INVITEE, REFERRAL_REDEEM_WINDOW_MS } from "./rewards";
 import { encryptApiKey, decryptApiKey, isLegacyCiphertext } from "./crypto";
@@ -325,6 +325,14 @@ export interface IStorage {
   incrementApiKeyUsage(id: string): Promise<void>;
   resetApiKeyDailyUsage(id: string): Promise<void>;
   checkApiKeyRateLimit(id: string): Promise<{ allowed: boolean; usage: number; limit: number }>;
+
+  // Source Uploads — img2img / img2vid source images retained for 5 days
+  createSourceUpload(data: { userId: string; objectPath: string; generationType: string }): Promise<SourceUpload>;
+  linkSourceUploadToGeneration(id: string, generationId: string): Promise<void>;
+  getSourceUploadsPaginated(limit: number, offset: number): Promise<{ uploads: (SourceUpload & { user?: User })[]; total: number }>;
+  getExpiredSourceUploads(): Promise<SourceUpload[]>;
+  deleteSourceUpload(id: string): Promise<void>;
+  getSourceUpload(id: string): Promise<SourceUpload | undefined>;
 }
 
 // NOTE: The old in-memory MemStorage implementation (unused — `storage` is
@@ -3685,6 +3693,50 @@ export class DatabaseStorage implements IStorage {
       usage: currentUsage,
       limit: key.dailyLimit || 1200,
     };
+  }
+  // Source Uploads
+  async createSourceUpload(data: { userId: string; objectPath: string; generationType: string }): Promise<SourceUpload> {
+    const expiresAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const [row] = await db.insert(sourceUploads).values({
+      userId: data.userId,
+      objectPath: data.objectPath,
+      generationType: data.generationType,
+      expiresAt,
+    }).returning();
+    return row;
+  }
+
+  async linkSourceUploadToGeneration(id: string, generationId: string): Promise<void> {
+    await db.update(sourceUploads).set({ generationId }).where(eq(sourceUploads.id, id));
+  }
+
+  async getSourceUploadsPaginated(limit: number, offset: number): Promise<{ uploads: (SourceUpload & { user?: User })[]; total: number }> {
+    const [rows, [{ count: totalCount }]] = await Promise.all([
+      db.select({ upload: sourceUploads, user: users })
+        .from(sourceUploads)
+        .leftJoin(users, eq(sourceUploads.userId, users.id))
+        .orderBy(desc(sourceUploads.uploadedAt))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(sourceUploads),
+    ]);
+    return {
+      uploads: rows.map(r => ({ ...r.upload, user: r.user ?? undefined })),
+      total: totalCount,
+    };
+  }
+
+  async getExpiredSourceUploads(): Promise<SourceUpload[]> {
+    return db.select().from(sourceUploads).where(lt(sourceUploads.expiresAt, new Date()));
+  }
+
+  async deleteSourceUpload(id: string): Promise<void> {
+    await db.delete(sourceUploads).where(eq(sourceUploads.id, id));
+  }
+
+  async getSourceUpload(id: string): Promise<SourceUpload | undefined> {
+    const [row] = await db.select().from(sourceUploads).where(eq(sourceUploads.id, id));
+    return row ?? undefined;
   }
 }
 

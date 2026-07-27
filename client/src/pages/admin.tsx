@@ -1099,6 +1099,39 @@ export default function AdminPage() {
     enabled: !!user?.isAdmin,
   });
 
+  // Source uploads (img2img / img2vid) — 5-day retention
+  const [sourceUploadPage, setSourceUploadPage] = useState(0);
+  const SOURCE_UPLOADS_PAGE_SIZE = 20;
+  const { data: sourceUploadsData, refetch: refetchSourceUploads } = useQuery<any>({
+    queryKey: ["/api/admin/source-uploads", sourceUploadPage],
+    queryFn: () => apiRequest('GET', `/api/admin/source-uploads?limit=${SOURCE_UPLOADS_PAGE_SIZE}&offset=${sourceUploadPage * SOURCE_UPLOADS_PAGE_SIZE}`).then(r => r.json()),
+    enabled: !!user?.isAdmin,
+  });
+
+  const deleteSourceUploadMutation = useMutation({
+    mutationFn: (id: string) => apiRequest('DELETE', `/api/admin/source-uploads/${id}`),
+    onSuccess: () => {
+      refetchSourceUploads();
+      toast({ title: "Upload deleted", description: "Source image removed from storage." });
+    },
+    onError: () => toast({ title: "Delete failed", variant: "destructive" }),
+  });
+
+  async function viewSourceUpload(id: string, download = false) {
+    try {
+      const res = await apiRequest('GET', `/api/admin/source-uploads/${id}/url`);
+      const { url } = await res.json();
+      const a = document.createElement('a');
+      a.href = url;
+      if (download) a.download = `source-upload-${id}.jpg`;
+      else a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
+    } catch {
+      toast({ title: "Failed to get download URL", variant: "destructive" });
+    }
+  }
+
   // Object storage queries
   const [selectedFolder, setSelectedFolder] = useState('cards/prompts/');
   const { data: storageStats } = useQuery<any>({
@@ -4240,6 +4273,101 @@ export default function AdminPage() {
                 </CardContent>
               </Card>
             )}
+
+            {/* Source Uploads — img2img / img2vid, 5-day retention */}
+            <Card className="transition-all duration-200 hover:shadow-md">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ImageIcon className="h-5 w-5" />
+                  Source Uploads (img2img / img2vid)
+                </CardTitle>
+                <CardDescription>
+                  Images uploaded by users as sources for transformations. Automatically deleted after 5 days.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {sourceUploadsData ? (
+                  <>
+                    <div className="rounded-md border overflow-hidden mb-4">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-medium">User</th>
+                            <th className="text-left px-3 py-2 font-medium">Type</th>
+                            <th className="text-left px-3 py-2 font-medium">Uploaded</th>
+                            <th className="text-left px-3 py-2 font-medium">Expires</th>
+                            <th className="text-right px-3 py-2 font-medium">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sourceUploadsData.uploads?.length > 0 ? (
+                            sourceUploadsData.uploads.map((u: any) => {
+                              const expired = new Date(u.expiresAt) < new Date();
+                              return (
+                                <tr key={u.id} className="border-t hover:bg-muted/30 transition-colors">
+                                  <td className="px-3 py-2 text-xs">
+                                    <span className="font-medium">{u.user?.username || u.user?.email || u.userId.slice(0, 8)}</span>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Badge variant={u.generationType === 'img2vid' ? 'default' : 'secondary'} className="text-xs">
+                                      {u.generationType}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                                    {format(new Date(u.uploadedAt), 'MMM d, h:mm a')}
+                                  </td>
+                                  <td className="px-3 py-2 text-xs">
+                                    <span className={expired ? 'text-red-500 font-medium' : 'text-muted-foreground'}>
+                                      {expired ? 'Expired' : format(new Date(u.expiresAt), 'MMM d, h:mm a')}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => viewSourceUpload(u.id, false)} title="View">
+                                        <Eye className="h-3 w-3" />
+                                      </Button>
+                                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => viewSourceUpload(u.id, true)} title="Download">
+                                        <Download className="h-3 w-3" />
+                                      </Button>
+                                      <Button
+                                        size="sm" variant="ghost"
+                                        className="h-7 w-7 p-0 text-red-500 hover:text-red-700"
+                                        onClick={() => { if (window.confirm('Delete this source upload?')) deleteSourceUploadMutation.mutate(u.id); }}
+                                        title="Delete"
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            <tr>
+                              <td colSpan={5} className="px-3 py-8 text-center text-muted-foreground text-sm">
+                                No source uploads found
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between text-sm text-muted-foreground">
+                      <span>{sourceUploadsData.total ?? 0} total uploads</span>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" disabled={sourceUploadPage === 0} onClick={() => setSourceUploadPage(p => p - 1)}>Previous</Button>
+                        <Button size="sm" variant="outline" disabled={(sourceUploadPage + 1) * SOURCE_UPLOADS_PAGE_SIZE >= (sourceUploadsData.total ?? 0)} onClick={() => setSourceUploadPage(p => p + 1)}>Next</Button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-8">
+                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                    <p className="text-sm text-muted-foreground">Loading uploads...</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Platform Settings Tab */}
