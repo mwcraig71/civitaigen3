@@ -793,27 +793,8 @@ function friendlyGenerationError(raw: string): string {
         batchTracker.delete(originalGenerationId);
       }
 
-      // Best-effort archival to object storage so the video survives
-      // CivitAI blob expiry. Failures are non-fatal — the CDN URL stays
-      // in the DB as a fallback.
-      Promise.resolve().then(async () => {
-        try {
-          const objectStorageService = new ObjectStorageService();
-          const privateDir = (process.env.PRIVATE_OBJECT_DIR || "").trim();
-          if (!privateDir) return;
-          const resp = await fetch(videoUrl);
-          if (!resp.ok) throw new Error(`fetch video failed: ${resp.status}`);
-          const buf = Buffer.from(await resp.arrayBuffer());
-          const fullPath = `${privateDir}/videos/${originalGenerationId}.mp4`;
-          const { bucketName, objectName } = parseObjectPath(fullPath);
-          const file = objectStorageClient.bucket(bucketName).file(objectName);
-          await file.save(buf, { metadata: { contentType: "video/mp4" } });
-          await storage.updateGeneration(originalGenerationId, { storedImagePath: fullPath } as any);
-          logger.info(`📁 Archived video to ${fullPath}`);
-        } catch (e) {
-          logger.info(`⚠️ Video archival failed for ${originalGenerationId}: ${(e as Error).message} — CDN URL preserved`);
-        }
-      });
+      // Videos are not archived to object storage — CivitAI CDN URL in the DB
+      // is the only reference kept. Users download directly from CivitAI.
     } catch (error) {
       logger.error('Error processing video result:', error);
     }
