@@ -3746,3 +3746,6 @@ export const storage = new DatabaseStorage();
 // Seed credit packages and sanitization rules on startup
 storage.seedCreditPackages();
 storage.seedDefaultSanitizationRules();
+
+// Seed platform characters, scenes, and events
+import("./seed-content").then(m => m.seedPlatformContent());
