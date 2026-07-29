@@ -77,10 +77,10 @@ export default function Transform() {
     queryKey: ["/api/models?type=Checkpoint&limit=50"],
   });
 
-  // img2img runs on Flux 2 Klein (Civitai-hosted) and does not use the selected
-  // checkpoint's weights — so any checkpoint can be picked here (the selection
-  // is kept for the generation record / gallery metadata only).
-  const models = allModels;
+  // Only show models that came from CivitAI (have a civitaiId). These are the
+  // models CivitAI orchestration can work with. The selection is stored as
+  // generation metadata; img2img itself runs on Flux 2 Klein.
+  const models = allModels?.filter((m) => !!m.civitaiId);
 
   // Default img2img checkpoint to the first model that loads.
   useEffect(() => {
