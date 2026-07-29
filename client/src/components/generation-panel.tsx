@@ -1131,12 +1131,19 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
       // Collect current form data
       const currentPrompt = form.getValues('prompt') || '';
       
+      // Resolve the selected model's baseModel so the enhancer can pick the
+      // right prompt style (Pony tag-list vs Krea2/Flux natural language).
+      const modelId = form.getValues('modelId');
+      const selectedModel = allModels.find((m: Model) => m.id === modelId);
+
       // Simple request with just the current prompt - no complex data
       const request = {
         currentPrompt,
         contentRating: 'explicit' as const,
         shotStyle,
         enhanceDirection: enhanceDirection.trim() || undefined,
+        baseModel: selectedModel?.baseModel || undefined,
+        modelName: selectedModel?.name || undefined,
       };
       
       console.log('🤖 Enhancing prompt with AI (simplified)...', { 

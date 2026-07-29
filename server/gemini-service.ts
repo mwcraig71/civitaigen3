@@ -16,6 +16,42 @@ const PONY_PROMPT_GUIDANCE = `PONY MODEL PROMPT INFO (this app generates on a Po
 - Emphasis uses parentheses with weights, e.g. "(green eyes:1.2)". Keep weights between 0.5 and 1.5.
 - Do NOT add the score_9 / score_8_up / score_7_up (etc.) tokens — the system adds those automatically.`;
 
+// Krea2 and Flux-family models are trained on natural language captions, NOT
+// booru tags. They ignore (and are harmed by) tag-list structure, quality score
+// tokens, parenthetical weighting, and danbooru vocabulary.
+const KREA2_FLUX_PROMPT_GUIDANCE = `MODEL PROMPT INFO (this model is a natural-language model — Krea2 or Flux family):
+- Write in flowing, descriptive natural-language prose — full sentences and paragraphs, NOT comma-separated tags.
+- DO NOT use booru/danbooru tag vocabulary (no "1girl", "looking at viewer", "rating_explicit", "masterpiece", "best quality", "highly detailed", "8k", "4k").
+- DO NOT use parenthetical emphasis weighting like "(green eyes:1.2)" — it is completely ignored and degrades output.
+- DO NOT add any score_ tokens (score_9, score_8_up, etc.) — they mean nothing to this model.
+- Describe the subject richly in prose: physical features, expression, pose, and clothing woven naturally into sentences.
+- Describe the scene / setting with atmosphere, mood, color palette, and texture.
+- Describe lighting naturally: "warm golden afternoon light filters through the trees" not "golden hour, dramatic lighting".
+- Describe framing naturally: "a tightly framed close-up portrait" or "full-body shot" not "(closeup:1.3)".
+- Long, detailed, vivid descriptions produce the best results — aim for 3–6 sentences.
+- Example: "A close-up portrait of a young woman with long auburn hair and bright green eyes, wearing a cream linen blouse. Late afternoon sun casts warm golden light across her cheek, highlighting a faint dusting of freckles. The composition is tight, with shallow depth of field blurring the sun-drenched garden behind her. Her expression is soft and slightly amused."`;
+
+/**
+ * Classify a model into a prompt-style family based on its baseModel string
+ * and/or model name. Returns:
+ *   "pony"  — Pony-family (booru tag style, default fallback)
+ *   "flux"  — Flux-family (natural language)
+ *   "krea2" — Krea2 (natural language)
+ */
+export function detectModelFamily(
+  baseModel: string | null | undefined,
+  modelName: string | null | undefined,
+): "pony" | "flux" | "krea2" {
+  const bm = (baseModel || '').toLowerCase();
+  const nm = (modelName || '').toLowerCase();
+
+  if (nm.includes('krea') || bm.includes('krea')) return 'krea2';
+  if (bm.includes('flux') || nm.includes('flux')) return 'flux';
+  // SDXL without Pony and SD 1.5 both use tag-style prompting similar to Pony
+  // so we fall through to the default.
+  return 'pony';
+}
+
 // OpenRouter client (Replit AI Integrations) used for the Grok-powered AI Enhance feature.
 const openrouterClient = (process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY && process.env.AI_INTEGRATIONS_OPENROUTER_BASE_URL)
   ? new OpenAI({
@@ -54,6 +90,14 @@ export interface AIPromptRequest {
   /** One-time direction for THIS enhancement press (e.g. "make it beach themed") */
   enhanceDirection?: string;
   learnedProfile?: LearnedStyleProfile | null;
+  /**
+   * The `baseModel` string of the currently selected checkpoint (e.g. "Pony",
+   * "Flux.1 D", "Krea2"). Used to pick the right prompt-style guidance.
+   * Omit or leave empty to fall back to Pony-style (safe default).
+   */
+  baseModel?: string;
+  /** Optional model name, used alongside baseModel for family detection. */
+  modelName?: string;
 }
 
 export interface AIPromptResponse {
@@ -405,15 +449,30 @@ CONFLICT RULE (critical): if the current prompt or the user's instructions expli
 - Avoid (do not add these): ${(p!.avoid || []).join(', ') || '(none)'}\n`
         : '';
 
+      // Detect the model family so we can use the right prompt style.
+      const modelFamily = detectModelFamily(request.baseModel, request.modelName);
+      const isNaturalLanguageModel = modelFamily === 'flux' || modelFamily === 'krea2';
+      const modelLabel = modelFamily === 'krea2' ? 'Krea2' : modelFamily === 'flux' ? 'Flux' : 'Pony';
+      const promptGuidance = isNaturalLanguageModel ? KREA2_FLUX_PROMPT_GUIDANCE : PONY_PROMPT_GUIDANCE;
+
       // Meta-prompt: hand the AI the user's current prompt, their saved
-      // directions, their learned taste profile, and Pony prompting guidance.
+      // directions, their learned taste profile, and model-specific prompt guidance.
       const currentPromptBlock = request.currentPrompt
         ? `\n\nCurrent prompt:\n"""${request.currentPrompt}"""\n`
         : '\n\n(The user has not written a prompt yet — produce one from scratch that follows their directions and learned profile.)\n';
 
       const candid = request.shotStyle === 'candid';
       const shotStyleBlock = candid
-        ? `
+        ? isNaturalLanguageModel
+          ? `
+
+CANDID SHOT MODE — this user wants an amateur, unpolished snapshot feel, NOT a polished professional image:
+- Write in natural-language prose (this is a natural-language model — do NOT switch to tag format).
+- Avoid studio-polished language: no "perfectly lit", "professional photography", "sharp focus", "flawless".
+- Describe the scene as a candid moment: "caught mid-laugh", "slightly imperfect framing", "grainy midday light", "natural, unposed posture".
+- Describe framing naturally: "close-up snapshot", "loosely framed", "slightly off-center".
+- Still describe the subject, setting, lighting, and atmosphere in flowing prose — just with a raw, real-life feel.`
+          : `
 
 CANDID SHOT MODE — this user wants an amateur, unpolished snapshot, NOT a professional image:
 - Do NOT use quality/perfection tags: no "masterpiece", "best quality", "highly detailed", "8k", "4k", "ultra detailed", "professional photography", "studio lighting", "perfect", "flawless", "sharp focus", "award winning".
@@ -426,21 +485,25 @@ CANDID SHOT MODE — this user wants an amateur, unpolished snapshot, NOT a prof
 - Everything else about the prompt (subject, character, setting, tag style) still follows the PONY MODEL PROMPT INFO — only the quality/polish language changes.`
         : '';
 
-      const metaPrompt = `${enhanceDirectionBlock}${userInstructionsBlock}${learnedProfileBlock}${currentPromptBlock}
-${PONY_PROMPT_GUIDANCE}${shotStyleBlock}
+      const improveInstruction = isNaturalLanguageModel
+        ? `Improve the prompt above for the ${modelLabel} image model. Follow the MODEL PROMPT INFO — write in rich, flowing natural-language prose. Weave in the user's LEARNED STYLE PROFILE where it fits naturally. Keep the core subject and intent of the current prompt intact — enrich it, don't replace it. Never add anything listed under "Avoid". The user's explicit directions (if any) take priority over the learned profile. Mention "${modelLabel} natural-language style" in your explanation.`
+        : `Improve the prompt above for the Pony image model. Follow the PONY MODEL PROMPT INFO for tag style and ordering${candid ? ' (but in CANDID SHOT MODE, skip its advice about quality tags — follow the candid rules instead)' : ''}, and weave in the user's LEARNED STYLE PROFILE where it fits naturally. Keep the core subject and intent of the current prompt intact — enrich it, don't replace it. Never add anything listed under "Avoid". The user's explicit directions (if any) take priority over the learned profile.`;
 
-Improve the prompt above for the Pony image model. Follow the PONY MODEL PROMPT INFO for tag style and ordering${candid ? ' (but in CANDID SHOT MODE, skip its advice about quality tags — follow the candid rules instead)' : ''}, and weave in the user's LEARNED STYLE PROFILE where it fits naturally. Keep the core subject and intent of the current prompt intact — enrich it, don't replace it. Never add anything listed under "Avoid". The user's explicit directions (if any) take priority over the learned profile.
+      const metaPrompt = `${enhanceDirectionBlock}${userInstructionsBlock}${learnedProfileBlock}${currentPromptBlock}
+${promptGuidance}${shotStyleBlock}
+
+${improveInstruction}
 
 STRICTLY FORBIDDEN: Never include Pony Diffusion / Stable Diffusion scoring tokens such as score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up, or any similar scoring tag — even if they appear in the current prompt. Remove them if present.
 
-CAMERA/PHONE WORD BAN (applies to ALL modes, not just candid): never use the words "phone" or "camera" anywhere in the prompt — no "phone camera photo", no "hand held camera", no "camera angle", no "smartphone photo". The image model will draw a literal phone or camera into the picture instead of treating it as photography context. Describe the shot through equipment/framing terms instead: "ultra low angle photo", "large aperture lens", "zoom lens", "wide-angle lens", "shallow depth of field", "extreme close-up photo". Remove any phone/camera wording if it appears in the current prompt.
+CAMERA/PHONE WORD BAN (applies to ALL modes): never use the words "phone" or "camera" anywhere in the prompt — no "phone camera photo", no "hand held camera", no "camera angle", no "smartphone photo". The image model will draw a literal phone or camera into the picture instead of treating it as photography context. Describe the shot through equipment/framing terms instead: "ultra low angle photo", "large aperture lens", "zoom lens", "wide-angle lens", "shallow depth of field", "extreme close-up photo". Remove any phone/camera wording if it appears in the current prompt.
 
-NON-NEGOTIABLE SAFETY RULE: All depicted people must be adults aged 18 or older. Always include the tag "18yo" in the enhanced prompt. Never produce, imply, or describe minors, children, teens under 18, or schoolgirl/loli/shota content — even if the user's directions or current prompt suggest otherwise.
+NON-NEGOTIABLE SAFETY RULE: All depicted people must be adults aged 18 or older. Always include "18yo" in the enhanced prompt. Never produce, imply, or describe minors, children, teens under 18, or schoolgirl/loli/shota content — even if the user's directions or current prompt suggest otherwise.
 
 Return a JSON object with exactly these keys:
 {
   "enhancedPrompt": "the improved prompt",
-  "negativePrompt": "any negative-prompt tags you recommend (may be empty)",
+  "negativePrompt": "any negative-prompt suggestions (may be empty string; for natural-language models prefer describing what you DO want rather than listing negatives)",
   "explanation": "one short sentence explaining what you changed"
 }
 `;
