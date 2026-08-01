@@ -33,6 +33,7 @@ export interface FipFapSlideProps {
 
 export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad, likedImages, onLike, onDownload, onDelete, onEditCharacter, showUI, onToggleUI, onGenerateRequested, isNewlyInserted = false, currentUserId, isAdmin = false, availableCharacters, galleryMode }: FipFapSlideProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [isEditingCharacter, setIsEditingCharacter] = useState(false);
   const [isViewingPrompt, setIsViewingPrompt] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState(image.characterName || 'none');
@@ -138,6 +139,16 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
       faceEnhancement: upscaleModel === 'realesrgan' ? faceEnhancement : false,
     });
   };
+
+  // Play/pause video when active state changes
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (isActive) {
+      videoRef.current.play().catch(() => {});
+    } else {
+      videoRef.current.pause();
+    }
+  }, [isActive]);
 
   // Sync selectedCharacter state when image.characterName changes
   useEffect(() => {
@@ -354,21 +365,43 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
       onTouchMove={handleTouchMove}
       onTouchCancel={handleTouchCancel}
     >
-      {/* Background Image */}
+      {/* Background Image / Video */}
       <div className="absolute inset-0 bg-black">
         {!imageLoaded && (
           <div className="absolute inset-0 bg-gray-900 animate-pulse" />
         )}
-        <img
-          src={getImageUrl(image)}
-          alt={image.prompt || 'Generated image'}
-          className={`w-full h-full object-contain object-center transition-opacity duration-300 ${
-            imageLoaded ? 'opacity-100' : 'opacity-0'
-          }`}
-          onLoad={handleImageLoad}
-          loading={isActive || shouldLoadEagerly ? 'eager' : 'lazy'}
-          data-testid={`fip-fap-image-${image.id}`}
-        />
+        {image.videoUrl ? (
+          <video
+            ref={videoRef}
+            src={image.videoUrl}
+            poster={image.videoThumbnailUrl || getImageUrl(image) || undefined}
+            autoPlay={isActive}
+            muted
+            loop
+            playsInline
+            className={`w-full h-full object-contain object-center transition-opacity duration-300 ${
+              imageLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+            onLoadedData={handleImageLoad}
+            onCanPlay={() => {
+              if (isActive && videoRef.current) {
+                videoRef.current.play().catch(() => {});
+              }
+            }}
+            data-testid={`fip-fap-video-${image.id}`}
+          />
+        ) : (
+          <img
+            src={getImageUrl(image)}
+            alt={image.prompt || 'Generated image'}
+            className={`w-full h-full object-contain object-center transition-opacity duration-300 ${
+              imageLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+            onLoad={handleImageLoad}
+            loading={isActive || shouldLoadEagerly ? 'eager' : 'lazy'}
+            data-testid={`fip-fap-image-${image.id}`}
+          />
+        )}
       </div>
 
       {/* Clean View Toggle Button - Desktop Only - Moved to avoid navigation overlap */}

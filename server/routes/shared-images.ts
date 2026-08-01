@@ -334,8 +334,8 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
         return res.status(403).json({ message: "Not authorized to share this generation" });
       }
       
-      if (generation.status !== 'completed' || !generation.imageUrl) {
-        return res.status(409).json({ message: "Generation must be completed with an image to share" });
+      if (generation.status !== 'completed' || (!generation.imageUrl && !(generation as any).videoUrl)) {
+        return res.status(409).json({ message: "Generation must be completed to share" });
       }
       
       // Check for duplicate shares
@@ -344,12 +344,26 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
         return res.status(409).json({ message: "Generation already shared to community" });
       }
       
+      // Determine video fields (video generations carry videoUrl + videoThumbnailUrl)
+      const genAny = generation as any;
+      const isVideo = !!(genAny.videoUrl);
+      const videoUrl: string | null = genAny.videoUrl || null;
+      const videoThumbnailUrl: string | null = genAny.videoThumbnailUrl || null;
+
+      // For the community display image: prefer the video first-frame thumbnail,
+      // then the stored source image, then the raw imageUrl.
+      const displayImageUrl = (isVideo ? (videoThumbnailUrl || generation.imageUrl) : generation.imageUrl) || '';
+
       // Compute thumbnail URL if image is in object storage
-      let thumbnailUrl = null;
+      let thumbnailUrl: string | null = null;
       if (generation.storedImagePath) {
         thumbnailUrl = objectStorageService.getThumbnailPath(generation.storedImagePath);
       }
-      
+      // For videos without a stored image path, use videoThumbnailUrl as thumbnail too
+      if (isVideo && !thumbnailUrl) {
+        thumbnailUrl = videoThumbnailUrl;
+      }
+
       // Server-side construction of share payload with all required fields
       const shareData = {
         generationId: generation.id,
@@ -358,8 +372,10 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
         negativePrompt: generation.negativePrompt || '',
         modelUsed: (generation as { modelName?: string | null }).modelName || generation.modelId || 'Unknown Model',
         modelId: generation.modelId, // Include actual model ID for regeneration
-        imageUrl: generation.imageUrl,
+        imageUrl: displayImageUrl,
         thumbnailUrl: thumbnailUrl,
+        videoUrl: videoUrl,
+        videoThumbnailUrl: videoThumbnailUrl,
         tags: tags || [],
         isNSFW: isNSFW || false,
         rating: rating || 'R', // Default to R if not provided

@@ -370,6 +370,8 @@ export const sharedImages = pgTable("shared_images", {
   characterName: text("character_name"), // Character name from generation data
   sceneName: text("scene_name"), // Scene name from generation data
   storedImagePath: text("stored_image_path"), // Object-storage copy (was read by code but missing from schema)
+  videoUrl: text("video_url"),               // For video generations shared to community
+  videoThumbnailUrl: text("video_thumbnail_url"), // First frame of the video
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("idx_shared_images_user_id").on(table.userId),

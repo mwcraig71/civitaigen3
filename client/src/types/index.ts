@@ -86,6 +86,8 @@ export interface Generation {
   characterName?: string;
   sceneName?: string;
   storedImagePath?: string;
+  videoUrl?: string | null;
+  videoThumbnailUrl?: string | null;
   storedMetadataPath?: string;
   generationType?: 'txt2img' | 'img2img' | 'img2vid';
   sourceImageUrl?: string;

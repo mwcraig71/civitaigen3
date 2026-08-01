@@ -530,37 +530,41 @@ export default function Community() {
     }
   };
 
-  const handleDownloadImage = async (imageId: string, imageUrl: string) => {
+  const handleDownloadImage = async (imageId: string, imageUrl: string, sharedImage?: SharedImage) => {
     try {
       // Track the download
       await apiRequest('POST', `/api/shared-images/${imageId}/download`);
-      
-      // Invalidate and refetch shared images to update the download count
       queryClient.invalidateQueries({ queryKey: ['/api/shared-images'] });
-      
-      // Download the actual image
-      const response = await fetch(imageUrl);
-      if (!response.ok) throw new Error('Failed to fetch image');
-      
+
+      // Use the video URL directly when available; fall back to the image URL
+      const isVideo = !!(sharedImage?.videoUrl);
+      const downloadUrl = isVideo ? sharedImage!.videoUrl! : imageUrl;
+      const fileName = isVideo
+        ? `community-video-${imageId}.mp4`
+        : `community-image-${imageId}.jpg`;
+
+      const response = await fetch(downloadUrl);
+      if (!response.ok) throw new Error('Failed to fetch media');
+
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = `community-image-${imageId}.jpg`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
-      
+
       toast({
         title: "Downloaded!",
-        description: "Image downloaded successfully",
+        description: isVideo ? "Video downloaded successfully" : "Image downloaded successfully",
       });
     } catch (error) {
       toast({
         title: "Error",
-        description: "Failed to download image",
+        description: "Failed to download",
         variant: "destructive",
       });
     }
@@ -908,6 +912,13 @@ export default function Community() {
                       }
                     }}
                   />
+                  {/* Video badge */}
+                  {image.videoUrl && (
+                    <div className="absolute bottom-2 left-2 bg-black/70 text-white rounded-full px-1.5 py-0.5 text-xs flex items-center gap-1 pointer-events-none">
+                      <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3"><path d="M8 5v14l11-7z"/></svg>
+                      Video
+                    </div>
+                  )}
                   {/* Click to view overlay */}
                   <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all flex items-center justify-center pointer-events-none">
                     <div className="opacity-0 group-hover:opacity-100 transition-opacity">
@@ -977,7 +988,7 @@ export default function Community() {
                       variant="secondary"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDownloadImage(image.id, getImageUrl(image));
+                        handleDownloadImage(image.id, getImageUrl(image), image);
                       }}
                       className="bg-green-500 hover:bg-green-600 text-white"
                       data-testid={`button-download-${image.id}`}

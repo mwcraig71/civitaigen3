@@ -2432,18 +2432,21 @@ export default function FipFap() {
   // Handle download functionality with mobile support
   const handleDownload = async (image: SharedImage) => {
     try {
-      const imageUrl = getImageUrl(image);
+      const isVideo = !!(image.videoUrl);
+      const imageUrl = isVideo ? image.videoUrl! : getImageUrl(image);
       const response = await fetch(imageUrl);
       const blob = await response.blob();
-      const fileName = `${image.characterName || 'image'}-${image.id}.jpg`;
+      const ext = isVideo ? 'mp4' : 'jpg';
+      const fileName = `${image.characterName || (isVideo ? 'video' : 'image')}-${image.id}.${ext}`;
       
       // Check if Web Share API is available (mobile devices)
       if (navigator.share && navigator.canShare) {
-        const file = new File([blob], fileName, { type: 'image/jpeg' });
+        const mimeType = isVideo ? 'video/mp4' : 'image/jpeg';
+        const file = new File([blob], fileName, { type: mimeType });
         const shareData = {
           files: [file],
-          title: image.characterName || 'Image',
-          text: 'Save this image to your photos'
+          title: image.characterName || (isVideo ? 'Video' : 'Image'),
+          text: isVideo ? 'Save this video to your photos' : 'Save this image to your photos'
         };
         
         // Check if sharing files is supported
@@ -2456,7 +2459,7 @@ export default function FipFap() {
           
           toast({
             title: "Success",
-            description: "Image ready to save - select 'Save to Photos'",
+            description: isVideo ? "Video ready to save - select 'Save to Photos'" : "Image ready to save - select 'Save to Photos'",
           });
           return;
         }
@@ -2478,13 +2481,13 @@ export default function FipFap() {
       
       toast({
         title: "Success",
-        description: "Image downloaded successfully",
+        description: isVideo ? "Video downloaded successfully" : "Image downloaded successfully",
       });
     } catch (error) {
       console.error('Download error:', error);
       toast({
         title: "Error", 
-        description: "Failed to download image",
+        description: "Failed to download",
         variant: "destructive",
       });
     }
