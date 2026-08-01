@@ -302,12 +302,17 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
           pollCivitAIJob(submit.token, generation.id, userId, pollerService, pollReq, userApiKey || undefined);
         } catch (bgErr) {
           const errMsg = (bgErr as Error).message || "Transform failed";
-          // Detect NSFW/content-policy rejections from fal so we give a clear
-          // message instead of the raw API error string.
+          // Detect content-policy / NSFW rejections and give a clear user message.
+          // Grok returns `reason:"blocked"` for xAI policy violations.
+          // FAL (WAN) may return NSFW/safety errors on explicit prompts.
+          const isGrokBlocked = /blocked|reason.*blocked/i.test(errMsg);
           const isNsfwRejection =
+            isGrokBlocked ||
             /nsfw|content.?policy|safety|explicit|inappropriate|moderat/i.test(errMsg) ||
             /400|403/.test(errMsg);
-          const userMessage = isNsfwRejection
+          const userMessage = isGrokBlocked
+            ? "Video generation failed — content blocked by xAI policy. Try a different prompt or source image."
+            : isNsfwRejection
             ? "Video generation failed — the content was flagged. Try a less explicit prompt or source image."
             : errMsg;
           logger.error("❌ Transform submit failed:", bgErr);

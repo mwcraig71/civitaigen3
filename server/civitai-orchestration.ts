@@ -36,7 +36,8 @@ export type VideoEngine =
   | "wan-fal-2.5"
   | "kling-2.5"
   | "vidu-q3"
-  | "ltx-2";
+  | "ltx-2"
+  | "grok-img2vid";
 
 interface VideoRecipe {
   workflowTemplate: string; // e.g. "wan-image-to-video"
@@ -67,6 +68,7 @@ const VIDEO_RECIPES: Record<VideoEngine, VideoRecipe> = {
   "kling-2.5":     WAN_2_1, // FAL Kling not yet wired; fall back to WAN
   "vidu-q3":       WAN_2_1, // FAL Vidu not yet wired; fall back to WAN
   "ltx-2":         WAN_2_1, // LTX template not yet wired; fall back to WAN
+  "grok-img2vid":  { ...WAN_2_1, allowsNsfw: false }, // xAI Grok via FAL — no NSFW
 };
 
 export function getVideoRecipe(engine: VideoEngine): VideoRecipe {
@@ -680,7 +682,35 @@ export class CivitAIOrchestrationService {
       userApiKey
     );
 
-    // WAN image-to-video via the documented `videoGen` recipe.
+    const duration = Math.max(1, Math.min(8, Math.round(input.durationSeconds ?? 5)));
+
+    // --- Grok video (xAI Grok-Imagine-Video via FAL) ---
+    // Docs: https://developer.civitai.com/orchestration/recipes/grok-video
+    // No `version` or `provider` keys — just `engine:"grok"`.
+    // No `negativePrompt` field (FAL-backed, ignores it).
+    // Aspect ratio inferred from source image when `aspectRatio:"auto"`.
+    // Typical runtime: 1–4 min. Content-policy blocks return `reason:"blocked"`.
+    if (input.engine === "grok-img2vid") {
+      const grokInput: any = {
+        engine: "grok",
+        operation: "image-to-video",
+        images: [sourceBlobUrl],
+        prompt: input.prompt,
+        resolution: "720p",
+        duration,
+        aspectRatio: "auto",
+      };
+      return this.submitWorkflow(
+        {
+          tags: ["video", "image-to-video", "grok"],
+          steps: [{ $type: "videoGen", input: grokInput }],
+        },
+        `videoGen grok img2vid ${duration}s`,
+        userApiKey
+      );
+    }
+
+    // --- WAN image-to-video via the documented `videoGen` recipe ---
     // Docs default: version:"v2.6", provider:"fal" — higher capacity, lower cost
     // (~650 Buzz/5 s vs v2.2 comfy's expensive per-pixel formula).
     // The v2.2/comfy path has very limited worker capacity and causes jobs to sit
@@ -695,8 +725,6 @@ export class CivitAIOrchestrationService {
     // NOTE on NSFW: fal may reject explicit prompts at generation time. The caller
     // in transform.ts catches submit errors and surfaces them immediately, so the
     // user gets a clear message rather than a 35-minute timeout.
-    const duration = Math.max(1, Math.min(8, Math.round(input.durationSeconds ?? 5)));
-
     const stepInput: any = {
       engine: "wan",
       version: "v2.6",

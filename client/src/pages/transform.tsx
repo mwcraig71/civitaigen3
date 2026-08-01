@@ -39,6 +39,7 @@ const VIDEO_ENGINES: { value: string; label: string; hint: string }[] = [
   { value: "kling-2.5", label: "Kling 2.5 Turbo", hint: "Fast cinematic motion, SFW only" },
   { value: "vidu-q3", label: "Vidu Q3", hint: "Smooth anime / stylized motion, SFW only" },
   { value: "ltx-2", label: "LTX 2", hint: "Lightricks open model, fast" },
+  { value: "grok-img2vid", label: "Grok Video (xAI)", hint: "xAI Grok-Imagine-Video, ~1–4 min, SFW only" },
 ];
 
 export default function Transform() {
