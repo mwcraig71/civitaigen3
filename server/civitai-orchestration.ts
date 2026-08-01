@@ -680,27 +680,32 @@ export class CivitAIOrchestrationService {
       userApiKey
     );
 
-    // WAN image-to-video via the documented `videoGen` recipe. The four
-    // discriminator keys (`engine`/`version`/`provider`/`operation`) select the
-    // input schema; we route to the Civitai-hosted ComfyUI provider because the
-    // FAL-hosted providers are cheaper but refuse NSFW content.
+    // WAN image-to-video via the documented `videoGen` recipe.
+    // Docs default: version:"v2.6", provider:"fal" — higher capacity, lower cost
+    // (~650 Buzz/5 s vs v2.2 comfy's expensive per-pixel formula).
+    // The v2.2/comfy path has very limited worker capacity and causes jobs to sit
+    // in "scheduled" state indefinitely (docs: error.code="no_provider").
     //
     // IMPORTANT: the legacy request shape (`operation: "imageToVideo"` + a raw
     // model AIR-URN + `numFrames`/`sourceImage`) is not a recognized schema, so
     // the orchestrator falls back to a per-pixel price (~250 × width × height ≈
     // 100,000,000 Buzz) and the submit fails with `insufficientBuzz`. The
-    // documented shape below prices ~445 Buzz/sec at 480p instead.
+    // documented shape below prices ~130 Buzz/sec at 720p via fal.
+    //
+    // NOTE on NSFW: fal may reject explicit prompts at generation time. The caller
+    // in transform.ts catches submit errors and surfaces them immediately, so the
+    // user gets a clear message rather than a 35-minute timeout.
     const duration = Math.max(1, Math.min(8, Math.round(input.durationSeconds ?? 5)));
 
     const stepInput: any = {
       engine: "wan",
-      version: "v2.2",
-      provider: "comfy",
+      version: "v2.6",
+      provider: "fal",
       operation: "image-to-video",
       images: [sourceBlobUrl],
       prompt: input.prompt,
-      negativePrompt: input.negativePrompt || "",
-      resolution: "480p",
+      // fal does not accept negativePrompt — omit it to avoid a 400 unknown-field error.
+      resolution: "720p",
       duration,
     };
     if (input.seed && input.seed > 0) stepInput.seed = input.seed;
@@ -710,7 +715,7 @@ export class CivitAIOrchestrationService {
         tags: ["video", "image-to-video"],
         steps: [{ $type: "videoGen", input: stepInput }],
       },
-      `videoGen wan v2.2 comfy ${duration}s`,
+      `videoGen wan v2.6 fal ${duration}s`,
       userApiKey
     );
   }
@@ -742,15 +747,21 @@ export class CivitAIOrchestrationService {
     // Log status transitions to aid debugging.
     logger.info(`🎬 Workflow ${workflowId.substring(0, 20)} step status: ${stepStatus} (terminal: ${terminal})`);
 
-    // Collect any media artifacts the step produced. CivitAI returns
-    // `output.images` and/or `output.videos` depending on operation.
-    // Field names vary across WAN versions: check all known variants.
+    // Collect any media artifacts the step produced.
+    // Per the WAN docs the success response is:
+    //   "output": { "video": { "id": "blob_...", "url": "https://.../signed.mp4" } }
+    // i.e. a SINGLE `video` object — NOT an array. Promote that to primary and
+    // keep `videos[]` / `outputs[]` as fallbacks for any legacy/alternative shapes.
     const media: any[] = [];
     const outImages = step.output?.images || [];
-    const rawVideoOut = step.output?.videos
+    // Primary: singular `video` object (documented v2.6 shape)
+    // Fallbacks: `videos[]` array, `outputs[]` array, `files[]` array
+    const rawVideoOut = step.output?.video
+      ? [step.output.video]
+      : step.output?.videos
       || step.output?.outputs
       || step.output?.files
-      || (step.output?.video ? [step.output.video] : []);
+      || [];
     const outVideos: any[] = Array.isArray(rawVideoOut) ? rawVideoOut : (rawVideoOut ? [rawVideoOut] : []);
 
     // In the v2 workflows API, output.images/videos only appear once the step

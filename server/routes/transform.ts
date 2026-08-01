@@ -301,6 +301,15 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
 
           pollCivitAIJob(submit.token, generation.id, userId, pollerService, pollReq, userApiKey || undefined);
         } catch (bgErr) {
+          const errMsg = (bgErr as Error).message || "Transform failed";
+          // Detect NSFW/content-policy rejections from fal so we give a clear
+          // message instead of the raw API error string.
+          const isNsfwRejection =
+            /nsfw|content.?policy|safety|explicit|inappropriate|moderat/i.test(errMsg) ||
+            /400|403/.test(errMsg);
+          const userMessage = isNsfwRejection
+            ? "Video generation failed — the content was flagged. Try a less explicit prompt or source image."
+            : errMsg;
           logger.error("❌ Transform submit failed:", bgErr);
           await storage.updateGenerationStatus(generation.id, "failed");
           // Refund credits on submit failure
@@ -314,7 +323,7 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
             generationId: generation.id,
             status: "failed",
             progress: 0,
-            message: (bgErr as Error).message || "Transform failed",
+            message: userMessage,
           });
         }
       })().catch((e) => logger.error("Transform bg unhandled:", e));
