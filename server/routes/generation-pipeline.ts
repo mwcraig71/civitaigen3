@@ -739,6 +739,27 @@ function friendlyGenerationError(raw: string): string {
     }
   }
 
+  // Resolve the ffmpeg binary: prefer the system PATH entry, fall back to known Nix paths.
+  function findFfmpegBin(): string {
+    // Common Nix store prefixes used on Replit
+    const candidates = [
+      "ffmpeg",
+      "/nix/store/jj9hkc8i90yb3dpcyyqlncijyj71w9id-replit-runtime-path/bin/ffmpeg",
+      "/usr/bin/ffmpeg",
+      "/usr/local/bin/ffmpeg",
+    ];
+    for (const c of candidates) {
+      try {
+        // execFileSync with --version is a quick existence check
+        require("child_process").execFileSync(c, ["-version"], { stdio: "ignore" });
+        return c;
+      } catch {
+        // not found at this path — try next
+      }
+    }
+    throw new Error("ffmpeg binary not found");
+  }
+
   // Extract the first video frame as a base64 JPEG data URL using ffmpeg.
   // Returns undefined on any error so callers can fall back to other thumbnails.
   async function extractVideoFirstFrame(videoUrl: string, generationId: string): Promise<string | undefined> {
@@ -754,8 +775,9 @@ function friendlyGenerationError(raw: string): string {
       const buf = Buffer.from(await res.arrayBuffer());
       await fs.writeFile(tmpVid, buf);
 
-      // Extract first frame with ffmpeg
-      await execFileAsync("ffmpeg", [
+      // Extract first frame with ffmpeg (locate binary at runtime to handle Nix PATH variance)
+      const ffmpegBin = findFfmpegBin();
+      await execFileAsync(ffmpegBin, [
         "-y", "-ss", "0.001", "-i", tmpVid,
         "-vframes", "1", "-vf", "scale=640:-2",
         "-q:v", "4", tmpThumb,
