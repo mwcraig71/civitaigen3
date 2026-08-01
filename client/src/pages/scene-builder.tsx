@@ -13,7 +13,6 @@ import { ArrowLeft, Copy, Wand2, Save, Search, Trash2, ChevronDown, ChevronRight
 import { Link } from "wouter";
 import { CSVFileManager } from "@/components/csv-file-manager";
 import { sceneBuilderData, eyeOptions } from "@/data/scene-builder-data";
-import { sceneMatrixData } from "@/data/scene-matrix-data";
 import { Badge } from "@/components/ui/badge";
 import { Eye } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -81,12 +80,6 @@ function SceneBuilder() {
   });
   const [sceneType, setSceneType] = useState<"user" | "shared">("user");
 
-  // Scene Matrix state (customMatrixData kept for Data Manager tab upload/download)
-  const [customMatrixData, setCustomMatrixData] = useState(() => {
-    const savedData = localStorage.getItem('customSceneMatrixData');
-    return savedData ? JSON.parse(savedData) : sceneMatrixData;
-  });
-  
   // JSON Repair state
   const [repairedJsonData, setRepairedJsonData] = useState<{content: string, filename: string} | null>(null);
   
@@ -569,105 +562,6 @@ function SceneBuilder() {
         variant: "destructive",
       });
     }
-  };
-
-  // Scene Matrix data functions (used by Data Manager tab)
-  const saveMatrixData = (newData: any) => {
-    setCustomMatrixData(newData);
-    localStorage.setItem('customSceneMatrixData', JSON.stringify(newData));
-  };
-
-
-  // Download Scene Matrix data as JSON file
-  const downloadMatrixData = () => {
-    try {
-      const dataToExport = {
-        version: "1.0",
-        exportDate: new Date().toISOString(),
-        sceneMatrix: customMatrixData
-      };
-      
-      const jsonString = JSON.stringify(dataToExport, null, 2);
-      const blob = new Blob([jsonString], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `scene-matrix-${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      
-      toast({
-        title: "Matrix Downloaded",
-        description: "Scene Matrix data has been downloaded successfully.",
-      });
-    } catch (error) {
-      toast({
-        title: "Download Failed",
-        description: "Failed to download Scene Matrix data.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Upload and import Scene Matrix data from JSON file
-  const uploadMatrixData = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
-      toast({
-        title: "Invalid File",
-        description: "Please select a valid JSON file.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const content = e.target?.result as string;
-        const importedData = JSON.parse(content);
-        
-        // Validate the structure
-        if (!importedData.sceneMatrix || typeof importedData.sceneMatrix !== 'object') {
-          throw new Error('Invalid Scene Matrix data structure');
-        }
-        
-        // Check if the imported data has the expected categories
-        const requiredCategories = ['location', 'outfit', 'position'];
-        const hasValidStructure = requiredCategories.every(category => 
-          importedData.sceneMatrix[category] && typeof importedData.sceneMatrix[category] === 'object'
-        );
-        
-        if (!hasValidStructure) {
-          throw new Error('Missing required categories in Scene Matrix data');
-        }
-        
-        // Import the data
-        saveMatrixData(importedData.sceneMatrix);
-        
-        toast({
-          title: "Matrix Imported",
-          description: `Scene Matrix data imported successfully${importedData.version ? ` (v${importedData.version})` : ''}.`,
-        });
-        
-      } catch (error) {
-        console.error('Import error:', error);
-        toast({
-          title: "Import Failed",
-          description: "Failed to import Scene Matrix data. Please check the file format.",
-          variant: "destructive",
-        });
-      }
-    };
-    
-    reader.readAsText(file);
-    // Reset the input so the same file can be uploaded again
-    event.target.value = '';
   };
 
   // Download complete Scene Builder Beta data as JSON file
@@ -2261,50 +2155,6 @@ function SceneBuilder() {
           
           <TabsContent value="data-manager" className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Scene Matrix Manager */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <FileText className="h-5 w-5" />
-                    Scene Matrix
-                  </CardTitle>
-                  <CardDescription>
-                    Upload and download your complete Scene Matrix customizations as a single file
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      onClick={downloadMatrixData}
-                      className="w-full"
-                      variant="outline"
-                      data-testid="button-download-matrix"
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Download
-                    </Button>
-                    <div className="relative">
-                      <Input
-                        type="file"
-                        accept=".json,application/json"
-                        onChange={uploadMatrixData}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        data-testid="input-upload-matrix"
-                      />
-                      <Button className="w-full" variant="outline">
-                        <Upload className="h-4 w-4 mr-2" />
-                        Upload
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    <p>• Download: Exports all your Scene Matrix customizations</p>
-                    <p>• Upload: Imports Scene Matrix data from a JSON file</p>
-                    <p>• Compatible with all categories and custom items</p>
-                  </div>
-                </CardContent>
-              </Card>
-
               {/* Scene Builder Beta Manager */}
               <Card>
                 <CardHeader>
@@ -2357,7 +2207,7 @@ function SceneBuilder() {
                     JSON Repair Tool
                   </CardTitle>
                   <CardDescription>
-                    Fix corrupted JSON files for Scene Matrix or Scene Builder Beta data
+                    Fix corrupted JSON files for Scene Builder Beta data
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -2390,7 +2240,7 @@ function SceneBuilder() {
                   <div className="text-xs text-muted-foreground">
                     <p>• Fixes missing commas in arrays and objects</p>
                     <p>• Repairs JSON structure automatically</p>
-                    <p>• Compatible with Scene Matrix and Scene Builder data</p>
+                    <p>• Compatible with Scene Builder data</p>
                     <p>• Download the repaired file after upload</p>
                   </div>
                 </CardContent>
