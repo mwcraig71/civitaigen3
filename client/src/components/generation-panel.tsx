@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useGenerationSettings } from '@/hooks/use-generation-settings';
-import { Sparkles, Settings, ChevronDown, RefreshCw, X, Download, Trash2, FileText } from 'lucide-react';
+import { Sparkles, Settings, ChevronDown, RefreshCw, X, Download, Trash2, FileText, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -2709,6 +2709,19 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                     <FormLabel className="flex flex-wrap items-center justify-between gap-y-2">
                       <span>Prompt</span>
                       <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2.5 text-xs text-slate-400 hover:text-white"
+                          onClick={handleSavePrompt}
+                          disabled={savePromptMutation.isPending}
+                          data-testid="button-save-prompt-inline"
+                          title="Save current prompt"
+                        >
+                          <Save className="h-3 w-3 mr-1" />
+                          {savePromptMutation.isPending ? 'Saving…' : 'Save'}
+                        </Button>
                         <Dialog>
                           <DialogTrigger asChild>
                             <Button
@@ -2846,7 +2859,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                       ✨ This tells AI Enhance what direction to take when it rewrites your prompt.
                     </div>
                     <div className="text-sm text-slate-400 mt-2">
-                      💡 Edit and add the freaky shit you're into to the prompt above, then hit generate!
+                      💡 Edit the prompt above, then hit generate!
                     </div>
                     
                     {/* Quick Tags */}

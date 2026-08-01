@@ -1506,18 +1506,10 @@ function SceneBuilder() {
       </CardHeader>
       <CardContent className="pb-16">
         <Tabs defaultValue="builder" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="builder" data-testid="tab-scene-builder" className="text-xs sm:text-sm">
               <span className="hidden sm:inline">Scene Builder</span>
               <span className="sm:hidden">Builder</span>
-            </TabsTrigger>
-            <TabsTrigger value="scene-matrix" data-testid="tab-scene-matrix" className="text-xs sm:text-sm">
-              <span className="hidden sm:inline">Scene Matrix</span>
-              <span className="sm:hidden">Matrix</span>
-            </TabsTrigger>
-            <TabsTrigger value="saved-scenes" data-testid="tab-saved-scenes" className="text-xs sm:text-sm">
-              <span className="hidden sm:inline">Saved Scenes</span>
-              <span className="sm:hidden">Scenes</span>
             </TabsTrigger>
             <TabsTrigger value="data-manager" data-testid="tab-data-manager" className="text-xs sm:text-sm">
               <span className="hidden sm:inline">Data Manager</span>
@@ -1577,136 +1569,239 @@ function SceneBuilder() {
 
             {/* Saved Scenes Panel */}
             {showSavedScenes && (
-              <Card className="p-6">
+              <Card>
                 <CardHeader>
-                  <CardTitle className="text-lg">Saved Scenes</CardTitle>
-                  <CardDescription>
-                    Search and load your saved scene configurations
-                  </CardDescription>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg">Saved Scenes</CardTitle>
+                      <CardDescription>
+                        Manage your saved scene configurations ({filteredScenes.length} scenes)
+                      </CardDescription>
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {/* Scene Type Tabs */}
+                  {/* Scene Type Toggle */}
                   <Tabs value={sceneType} onValueChange={(value) => setSceneType(value as "user" | "shared")}>
                     <TabsList className="grid w-full grid-cols-2">
                       <TabsTrigger value="user" data-testid="tab-user-scenes">My Scenes</TabsTrigger>
                       <TabsTrigger value="shared" data-testid="tab-shared-scenes">Shared Scenes</TabsTrigger>
                     </TabsList>
                   </Tabs>
-                  
-                  {/* Filter Controls */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                      <Label className="text-sm">Filter by Location Category</Label>
-                      <Select 
-                        value={sceneFilters.locationCategory} 
-                        onValueChange={(value) => setSceneFilters(prev => ({ ...prev, locationCategory: value === "all" ? "" : value }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="All categories" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All categories</SelectItem>
-                          {Object.keys(locationsByCategory).map((category) => (
-                            <SelectItem key={category} value={category}>
-                              {category}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-sm">Filter by Location</Label>
-                      <Input
-                        placeholder="Enter location..."
-                        value={sceneFilters.location}
-                        onChange={(e) => setSceneFilters(prev => ({ ...prev, location: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-sm">Filter by Outfit</Label>
-                      <Input
-                        placeholder="Enter outfit..."
-                        value={sceneFilters.outfit}
-                        onChange={(e) => setSceneFilters(prev => ({ ...prev, outfit: e.target.value }))}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-sm">Filter by Pose</Label>
-                      <Input
-                        placeholder="Enter pose..."
-                        value={sceneFilters.pose}
-                        onChange={(e) => setSceneFilters(prev => ({ ...prev, pose: e.target.value }))}
-                      />
-                    </div>
+
+                  {/* Search Bar */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search scenes by title, prompt, or tags..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10"
+                      data-testid="input-search-scenes"
+                    />
                   </div>
 
-                  <Separator />
+                  {/* Filter Controls Row */}
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                    <Select value={filterCategory} onValueChange={setFilterCategory}>
+                      <SelectTrigger data-testid="select-filter-category">
+                        <SelectValue placeholder="Category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Categories</SelectItem>
+                        {uniqueCategories.map(category => (
+                          <SelectItem key={category!} value={category!}>{category}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-                  {/* Saved Scenes List */}
-                  <div className="space-y-3 max-h-96 overflow-y-auto">
-                    {savedScenes.length === 0 ? (
-                      <p className="text-muted-foreground text-center py-8">
-                        No saved scenes found. Create and save a scene to see it here.
-                      </p>
+                    <Select value={filterLocation} onValueChange={setFilterLocation}>
+                      <SelectTrigger data-testid="select-filter-location">
+                        <SelectValue placeholder="Location" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Locations</SelectItem>
+                        {uniqueLocations.map(location => (
+                          <SelectItem key={location!} value={location!}>{location}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={filterOutfit} onValueChange={setFilterOutfit}>
+                      <SelectTrigger data-testid="select-filter-outfit">
+                        <SelectValue placeholder="Outfit" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Outfits</SelectItem>
+                        {uniqueOutfits.map(outfit => (
+                          <SelectItem key={outfit!} value={outfit!}>{outfit}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={sortBy} onValueChange={(value) => setSortBy(value as "date" | "title" | "category")}>
+                      <SelectTrigger data-testid="select-sort-by">
+                        <SortAsc className="h-4 w-4 mr-2" />
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="date">Date Created</SelectItem>
+                        <SelectItem value="title">Title</SelectItem>
+                        <SelectItem value="category">Category</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Button
+                      variant={showFavoritesOnly ? "default" : "outline"}
+                      onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
+                      className="flex items-center gap-2"
+                      data-testid="button-filter-favorites"
+                    >
+                      <Heart className={`h-4 w-4 ${showFavoritesOnly ? 'fill-red-500 text-red-500' : ''}`} />
+                      Favorites
+                    </Button>
+
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setFilterCategory("all");
+                        setFilterLocation("all");
+                        setFilterOutfit("all");
+                        setShowFavoritesOnly(false);
+                        setSortBy("date");
+                      }}
+                      className="flex items-center gap-2"
+                      data-testid="button-clear-filters"
+                    >
+                      <X className="h-4 w-4" />
+                      Clear
+                    </Button>
+                  </div>
+
+                  {filteredScenes.length === 0 ? (
+                    savedScenes.length === 0 ? (
+                      <div className="py-8 text-center">
+                        <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                        <p className="text-muted-foreground">No saved scenes yet. Build and save a scene above.</p>
+                      </div>
                     ) : (
-                      savedScenes.map((scene: SavedScene) => (
-                        <div
-                          key={scene.id}
-                          className="flex items-center gap-4 p-4 border rounded-lg hover:bg-muted/50"
-                        >
+                      <div className="py-8 text-center">
+                        <Filter className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                        <p className="text-muted-foreground mb-4">No scenes match your filters.</p>
+                        <Button variant="outline" onClick={() => {
+                          setSearchQuery("");
+                          setFilterCategory("all");
+                          setFilterLocation("all");
+                          setFilterOutfit("all");
+                          setShowFavoritesOnly(false);
+                        }}>
+                          Clear Filters
+                        </Button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[600px] overflow-y-auto">
+                      {filteredScenes.map((scene) => (
+                        <Card key={scene.id} className="h-full overflow-hidden" data-testid={`card-saved-scene-${scene.id}`}>
                           {scene.imageUrl && (
-                            <img
-                              src={scene.imageUrl}
-                              alt={scene.title}
-                              className="w-16 h-16 object-cover rounded-md border"
-                            />
+                            <div className="relative bg-muted flex items-center justify-center p-2">
+                              <img
+                                src={scene.imageUrl}
+                                alt={scene.title}
+                                className="max-w-full max-h-32 object-contain rounded"
+                                onError={(e) => {
+                                  const target = e.target as HTMLImageElement;
+                                  target.style.display = 'none';
+                                }}
+                              />
+                            </div>
                           )}
-                          <div className="flex-1">
-                            <h4 className="font-medium">{scene.title}</h4>
-                            <p className="text-sm text-muted-foreground line-clamp-2">
-                              {scene.prompt}
-                            </p>
-                            <div className="flex gap-2 mt-2 text-xs text-muted-foreground">
+                          <CardContent className="p-4">
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex-1 min-w-0">
+                                <h4 className="font-semibold text-sm truncate" title={scene.title}>{scene.title}</h4>
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  {scene.createdAt ? new Date(scene.createdAt).toLocaleDateString() : 'Unknown date'}
+                                </p>
+                              </div>
+                              <div className="flex gap-1 ml-2">
+                                <Button
+                                  variant="ghost" size="sm"
+                                  onClick={() => handleToggleFavorite(scene)}
+                                  className={`h-7 w-7 p-0 ${scene.isFavorite ? 'text-red-500 hover:text-red-600' : 'text-muted-foreground hover:text-red-500'}`}
+                                  data-testid={`button-favorite-scene-${scene.id}`}
+                                >
+                                  <Heart className={`h-3 w-3 ${scene.isFavorite ? 'fill-red-500 text-red-500' : ''}`} />
+                                </Button>
+                                {sceneType === "user" && (
+                                  <Button
+                                    variant="ghost" size="sm"
+                                    onClick={() => handleToggleShare(scene)}
+                                    className={`h-7 w-7 p-0 ${scene.isShared ? 'text-blue-500 hover:text-blue-600' : 'text-muted-foreground hover:text-blue-500'}`}
+                                    data-testid={`button-share-scene-${scene.id}`}
+                                    title={scene.isShared ? 'Unshare scene' : 'Share scene with community'}
+                                  >
+                                    <Share className={`h-3 w-3 ${scene.isShared ? 'text-blue-500' : ''}`} />
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost" size="sm"
+                                  onClick={() => handleEditScene(scene)}
+                                  className="h-7 w-7 p-0"
+                                  data-testid={`button-edit-scene-${scene.id}`}
+                                >
+                                  <Edit2 className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  variant="ghost" size="sm"
+                                  onClick={() => handleDeleteScene(scene.id)}
+                                  className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                                  data-testid={`button-delete-scene-${scene.id}`}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="mb-3">
+                              <p className="text-xs text-muted-foreground line-clamp-3">
+                                {scene.prompt.length > 100 ? `${scene.prompt.substring(0, 100)}...` : scene.prompt}
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap gap-1 mb-3">
                               {scene.locationCategory && (
-                                <span className="bg-muted px-2 py-1 rounded">
-                                  {scene.locationCategory}
-                                </span>
+                                <Badge variant="secondary" className="text-xs">{scene.locationCategory}</Badge>
                               )}
-                              {scene.outfit && (
-                                <span className="bg-muted px-2 py-1 rounded">
-                                  {scene.outfit}
-                                </span>
+                              {scene.location && (
+                                <Badge variant="outline" className="text-xs">{scene.location}</Badge>
                               )}
-                              {scene.pose && (
-                                <span className="bg-muted px-2 py-1 rounded">
-                                  {scene.pose}
-                                </span>
+                              {scene.tags && scene.tags.length > 0 && (
+                                scene.tags.slice(0, 2).map((tag, index) => (
+                                  <Badge key={index} variant="default" className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                    <Tag className="h-2 w-2 mr-1" />{tag}
+                                  </Badge>
+                                ))
+                              )}
+                              {scene.tags && scene.tags.length > 2 && (
+                                <Badge variant="outline" className="text-xs">+{scene.tags.length - 2} more</Badge>
                               )}
                             </div>
-                          </div>
-                          <div className="flex gap-2">
+
                             <Button
-                              size="sm"
-                              variant="outline"
+                              variant="outline" size="sm"
                               onClick={() => loadSavedScene(scene)}
+                              className="w-full text-xs"
                               data-testid={`button-load-scene-${scene.id}`}
                             >
-                              Load
+                              Load Scene
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => deleteSceneMutation.mutate(scene.id)}
-                              disabled={deleteSceneMutation.isPending}
-                              data-testid={`button-delete-scene-${scene.id}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -2382,716 +2477,9 @@ function SceneBuilder() {
               </div>
             )}
           </TabsContent>
+
           
-          <TabsContent value="scene-matrix" className="space-y-6">
-            {/* Matrix Controls */}
-            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold">Scene Matrix</h3>
-                <p className="text-sm text-muted-foreground">
-                  {isEditingMatrix ? "Edit mode: Customize categories and add new items." : "Browse and select scene elements to build your prompts."}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant={isEditingMatrix ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setIsEditingMatrix(!isEditingMatrix)}
-                  data-testid="button-toggle-edit-matrix"
-                >
-                  <Edit2 className="h-4 w-4 mr-2" />
-                  {isEditingMatrix ? "Exit Edit Mode" : "Edit Matrix"}
-                </Button>
-                {isEditingMatrix && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowAddCategory(true)}
-                      data-testid="button-add-category"
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Category
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={resetMatrixData}
-                      data-testid="button-reset-matrix"
-                    >
-                      <RotateCcw className="h-4 w-4 mr-2" />
-                      Reset
-                    </Button>
-                  </>
-                )}
-              </div>
-            </div>
 
-            {selectedItems.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">Selected Elements</CardTitle>
-                    <Button onClick={copyAllSelected} size="sm" variant="outline">
-                      <Copy className="h-4 w-4 mr-2" />
-                      Copy All
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedItems.map((item, index) => (
-                      <Badge 
-                        key={index} 
-                        variant="secondary" 
-                        className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground transition-colors"
-                        onClick={() => removeSelectedItem(item)}
-                        title="Click to remove"
-                      >
-                        {item} ×
-                      </Badge>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {copiedItem && (
-              <div className="fixed top-4 right-4 bg-primary text-primary-foreground px-4 py-2 rounded-md shadow-lg z-50">
-                Copied: {copiedItem}
-              </div>
-            )}
-
-            <Tabs defaultValue="location" className="space-y-6">
-              <TabsList className="grid w-full grid-cols-7 lg:grid-cols-8">
-                <TabsTrigger value="location">Location</TabsTrigger>
-                <TabsTrigger value="outfit">Outfit</TabsTrigger>
-                <TabsTrigger value="position">Position</TabsTrigger>
-                <TabsTrigger value="props">Props</TabsTrigger>
-                <TabsTrigger value="lighting">Lighting</TabsTrigger>
-                <TabsTrigger value="camera">Camera</TabsTrigger>
-                <TabsTrigger value="adult">Adult</TabsTrigger>
-                {/* Render custom category tabs */}
-                {Object.keys(customMatrixData).map((categoryKey) => {
-                  if (!['location', 'outfit', 'position', 'props', 'lighting', 'camera', 'adult'].includes(categoryKey)) {
-                    return (
-                      <TabsTrigger key={categoryKey} value={categoryKey} className="text-xs">
-                        {categoryKey.charAt(0).toUpperCase() + categoryKey.slice(1)}
-                      </TabsTrigger>
-                    );
-                  }
-                  return null;
-                })}
-              </TabsList>
-
-              <TabsContent value="location">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Location & Environment"
-                    data={customMatrixData.location}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="location"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Location</h4>
-                        {Object.keys(customMatrixData.location).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`location-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("location", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("location", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("location", subcategory)}
-                                disabled={!newItemTexts[`location-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="outfit">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Outfits & Clothing"
-                    data={customMatrixData.outfit}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="outfit"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Outfit</h4>
-                        {Object.keys(customMatrixData.outfit).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`outfit-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("outfit", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("outfit", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("outfit", subcategory)}
-                                disabled={!newItemTexts[`outfit-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="position">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Position & Action"
-                    data={customMatrixData.position}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="position"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Position</h4>
-                        {Object.keys(customMatrixData.position).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`position-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("position", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("position", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("position", subcategory)}
-                                disabled={!newItemTexts[`position-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="props">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Props & Objects"
-                    data={customMatrixData.props}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="props"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Props</h4>
-                        {Object.keys(customMatrixData.props).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`props-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("props", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("props", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("props", subcategory)}
-                                disabled={!newItemTexts[`props-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="lighting">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Lighting & Atmosphere"
-                    data={customMatrixData.lighting}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="lighting"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Lighting</h4>
-                        {Object.keys(customMatrixData.lighting).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`lighting-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("lighting", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("lighting", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("lighting", subcategory)}
-                                disabled={!newItemTexts[`lighting-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="camera">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Camera & Composition"
-                    data={customMatrixData.camera}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="camera"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Camera</h4>
-                        {Object.keys(customMatrixData.camera).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`camera-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("camera", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("camera", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("camera", subcategory)}
-                                disabled={!newItemTexts[`camera-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="adult">
-                <div className="space-y-4">
-                  <CategorySection
-                    title="Adult & Mature Themes"
-                    data={customMatrixData.adult}
-                    icon={<Eye className="h-5 w-5" />}
-                    onSelect={copyToClipboard}
-                    categoryKey="adult"
-                  />
-                  {isEditingMatrix && (
-                    <Card className="p-4 bg-muted/50">
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">Add New Items to Adult</h4>
-                        {Object.keys(customMatrixData.adult).map((subcategory) => (
-                          <div key={subcategory} className="space-y-2">
-                            <Label className="text-xs font-medium capitalize">Add to "{subcategory}":</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter new prompt word or phrase..."
-                                value={newItemTexts[`adult-${subcategory}`] || ""}
-                                onChange={(e) => updateNewItemText("adult", subcategory, e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addNewItem("adult", subcategory);
-                                  }
-                                }}
-                                className="flex-1"
-                                autoComplete="off"
-                              />
-                              <Button
-                                size="sm"
-                                onClick={() => addNewItem("adult", subcategory)}
-                                disabled={!newItemTexts[`adult-${subcategory}`]?.trim()}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                </div>
-              </TabsContent>
-
-              {/* Render custom categories dynamically */}
-              {Object.keys(customMatrixData).map((categoryKey) => {
-                if (!['location', 'outfit', 'position', 'props', 'lighting', 'camera', 'adult'].includes(categoryKey)) {
-                  return (
-                    <TabsContent key={categoryKey} value={categoryKey}>
-                      <CategorySection
-                        title={categoryKey.charAt(0).toUpperCase() + categoryKey.slice(1)}
-                        data={customMatrixData[categoryKey]}
-                        icon={<Eye className="h-5 w-5" />}
-                        onSelect={copyToClipboard}
-                        categoryKey={categoryKey}
-                      />
-                    </TabsContent>
-                  );
-                }
-                return null;
-              })}
-            </Tabs>
-          </TabsContent>
-          
-          <TabsContent value="saved-scenes" className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold">Your Saved Scenes</h3>
-                <p className="text-sm text-muted-foreground">
-                  Manage your saved scene configurations ({filteredScenes.length} scenes)
-                </p>
-              </div>
-            </div>
-
-            {/* Search and Filter Controls */}
-            <div className="grid gap-4">
-              {/* Search Bar */}
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search scenes by title, prompt, or tags..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
-                  data-testid="input-search-scenes"
-                />
-              </div>
-
-              {/* Filter Controls Row */}
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-                {/* Category Filter */}
-                <Select value={filterCategory} onValueChange={setFilterCategory}>
-                  <SelectTrigger data-testid="select-filter-category">
-                    <SelectValue placeholder="Category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Categories</SelectItem>
-                    {uniqueCategories.map(category => (
-                      <SelectItem key={category!} value={category!}>
-                        {category}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                {/* Location Filter */}
-                <Select value={filterLocation} onValueChange={setFilterLocation}>
-                  <SelectTrigger data-testid="select-filter-location">
-                    <SelectValue placeholder="Location" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Locations</SelectItem>
-                    {uniqueLocations.map(location => (
-                      <SelectItem key={location!} value={location!}>
-                        {location}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                {/* Outfit Filter */}
-                <Select value={filterOutfit} onValueChange={setFilterOutfit}>
-                  <SelectTrigger data-testid="select-filter-outfit">
-                    <SelectValue placeholder="Outfit" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Outfits</SelectItem>
-                    {uniqueOutfits.map(outfit => (
-                      <SelectItem key={outfit!} value={outfit!}>
-                        {outfit}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                {/* Sort By */}
-                <Select value={sortBy} onValueChange={(value) => setSortBy(value as "date" | "title" | "category")}>
-                  <SelectTrigger data-testid="select-sort-by">
-                    <SortAsc className="h-4 w-4 mr-2" />
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="date">Date Created</SelectItem>
-                    <SelectItem value="title">Title</SelectItem>
-                    <SelectItem value="category">Category</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {/* Favorites Toggle */}
-                <Button
-                  variant={showFavoritesOnly ? "default" : "outline"}
-                  onClick={() => setShowFavoritesOnly(!showFavoritesOnly)}
-                  className="flex items-center gap-2"
-                  data-testid="button-filter-favorites"
-                >
-                  <Heart className={`h-4 w-4 ${showFavoritesOnly ? 'fill-red-500 text-red-500' : ''}`} />
-                  Favorites
-                </Button>
-
-                {/* Clear Filters */}
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setSearchQuery("");
-                    setFilterCategory("all");
-                    setFilterLocation("all");
-                    setFilterOutfit("all");
-                    setShowFavoritesOnly(false);
-                    setSortBy("date");
-                  }}
-                  className="flex items-center gap-2"
-                  data-testid="button-clear-filters"
-                >
-                  <X className="h-4 w-4" />
-                  Clear
-                </Button>
-              </div>
-            </div>
-
-            {filteredScenes.length === 0 ? (
-              savedScenes.length === 0 ? (
-                <Card>
-                  <CardContent className="py-12 text-center">
-                    <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                    <h3 className="text-lg font-semibold mb-2">No saved scenes</h3>
-                    <p className="text-muted-foreground mb-4">
-                      Build a scene in the Scene Builder tab and save it to get started
-                    </p>
-                  </CardContent>
-                </Card>
-              ) : (
-                <Card>
-                  <CardContent className="py-12 text-center">
-                    <Filter className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                    <h3 className="text-lg font-semibold mb-2">No scenes match your filters</h3>
-                    <p className="text-muted-foreground mb-4">
-                      Try adjusting your search or filter criteria
-                    </p>
-                    <Button variant="outline" onClick={() => {
-                      setSearchQuery("");
-                      setFilterCategory("all");
-                      setFilterLocation("all");
-                      setFilterOutfit("all");
-                      setShowFavoritesOnly(false);
-                    }}>
-                      Clear Filters
-                    </Button>
-                  </CardContent>
-                </Card>
-              )
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredScenes.map((scene) => (
-                  <Card key={scene.id} className="h-full overflow-hidden" data-testid={`card-saved-scene-${scene.id}`}>
-                    {/* Scene Image */}
-                    {scene.imageUrl && (
-                      <div className="relative bg-muted flex items-center justify-center p-2">
-                        <img
-                          src={scene.imageUrl}
-                          alt={scene.title}
-                          className="max-w-full max-h-32 object-contain rounded"
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement;
-                            target.style.display = 'none';
-                          }}
-                        />
-                      </div>
-                    )}
-                    
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="font-semibold text-sm truncate" title={scene.title}>
-                            {scene.title}
-                          </h4>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {scene.createdAt ? new Date(scene.createdAt).toLocaleDateString() : 'Unknown date'}
-                          </p>
-                        </div>
-                        <div className="flex gap-1 ml-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleToggleFavorite(scene)}
-                            className={`h-7 w-7 p-0 ${scene.isFavorite ? 'text-red-500 hover:text-red-600' : 'text-muted-foreground hover:text-red-500'}`}
-                            data-testid={`button-favorite-scene-${scene.id}`}
-                          >
-                            <Heart className={`h-3 w-3 ${scene.isFavorite ? 'fill-red-500 text-red-500' : ''}`} />
-                          </Button>
-                          {/* Show share button only for user's own scenes */}
-                          {sceneType === "user" && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleToggleShare(scene)}
-                              className={`h-7 w-7 p-0 ${scene.isShared ? 'text-blue-500 hover:text-blue-600' : 'text-muted-foreground hover:text-blue-500'}`}
-                              data-testid={`button-share-scene-${scene.id}`}
-                              title={scene.isShared ? 'Unshare scene' : 'Share scene with community'}
-                            >
-                              <Share className={`h-3 w-3 ${scene.isShared ? 'text-blue-500' : ''}`} />
-                            </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditScene(scene)}
-                            className="h-7 w-7 p-0"
-                            data-testid={`button-edit-scene-${scene.id}`}
-                          >
-                            <Edit2 className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteScene(scene.id)}
-                            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                            data-testid={`button-delete-scene-${scene.id}`}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                      
-                      <div className="mb-3">
-                        <p className="text-xs text-muted-foreground line-clamp-3">
-                          {scene.prompt.length > 100 ? `${scene.prompt.substring(0, 100)}...` : scene.prompt}
-                        </p>
-                      </div>
-                      
-                      <div className="flex flex-wrap gap-1 mb-3">
-                        {scene.locationCategory && (
-                          <Badge variant="secondary" className="text-xs">
-                            {scene.locationCategory}
-                          </Badge>
-                        )}
-                        {scene.location && (
-                          <Badge variant="outline" className="text-xs">
-                            {scene.location}
-                          </Badge>
-                        )}
-                        {scene.tags && scene.tags.length > 0 && (
-                          scene.tags.slice(0, 2).map((tag, index) => (
-                            <Badge key={index} variant="default" className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                              <Tag className="h-2 w-2 mr-1" />
-                              {tag}
-                            </Badge>
-                          ))
-                        )}
-                        {scene.tags && scene.tags.length > 2 && (
-                          <Badge variant="outline" className="text-xs">
-                            +{scene.tags.length - 2} more
-                          </Badge>
-                        )}
-                      </div>
-                      
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => loadSavedScene(scene)}
-                        className="w-full text-xs"
-                        data-testid={`button-load-scene-${scene.id}`}
-                      >
-                        Load Scene
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </TabsContent>
           
           <TabsContent value="data-manager" className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
