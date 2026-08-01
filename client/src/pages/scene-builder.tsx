@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,7 +15,7 @@ import { CSVFileManager } from "@/components/csv-file-manager";
 import { sceneBuilderData, eyeOptions } from "@/data/scene-builder-data";
 import { sceneMatrixData } from "@/data/scene-matrix-data";
 import { Badge } from "@/components/ui/badge";
-import { Eye, Plus } from "lucide-react";
+import { Eye } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -81,19 +81,11 @@ function SceneBuilder() {
   });
   const [sceneType, setSceneType] = useState<"user" | "shared">("user");
 
-  // Scene Matrix state
-  const [copiedItem, setCopiedItem] = useState<string>("");
-  const [selectedItems, setSelectedItems] = useState<string[]>([]);
-  const [isEditingMatrix, setIsEditingMatrix] = useState(false);
+  // Scene Matrix state (customMatrixData kept for Data Manager tab upload/download)
   const [customMatrixData, setCustomMatrixData] = useState(() => {
     const savedData = localStorage.getItem('customSceneMatrixData');
     return savedData ? JSON.parse(savedData) : sceneMatrixData;
   });
-  const [newCategoryName, setNewCategoryName] = useState("");
-  const [newSubcategoryName, setNewSubcategoryName] = useState("");
-  const [newItemTexts, setNewItemTexts] = useState<Record<string, string>>({});
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [showAddSubcategory, setShowAddSubcategory] = useState("");
   
   // JSON Repair state
   const [repairedJsonData, setRepairedJsonData] = useState<{content: string, filename: string} | null>(null);
@@ -579,119 +571,12 @@ function SceneBuilder() {
     }
   };
 
-  // Scene Matrix functions
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedItem(text);
-    setTimeout(() => setCopiedItem(""), 2000);
-    
-    // Add to selected items if not already there
-    if (!selectedItems.includes(text)) {
-      setSelectedItems(prev => [...prev, text]);
-    }
-  };
-
-  const removeSelectedItem = (item: string) => {
-    setSelectedItems(prev => prev.filter(i => i !== item));
-  };
-
-  const copyAllSelected = () => {
-    const combined = selectedItems.join(", ");
-    navigator.clipboard.writeText(combined);
-    setCopiedItem("All selected items");
-    setTimeout(() => setCopiedItem(""), 2000);
-  };
-
-  // Scene Matrix editing functions
+  // Scene Matrix data functions (used by Data Manager tab)
   const saveMatrixData = (newData: any) => {
     setCustomMatrixData(newData);
     localStorage.setItem('customSceneMatrixData', JSON.stringify(newData));
   };
 
-  const addNewCategory = () => {
-    if (!newCategoryName.trim()) return;
-    const newData = {
-      ...customMatrixData,
-      [newCategoryName.toLowerCase()]: {
-        general: ["new item"]
-      }
-    };
-    saveMatrixData(newData);
-    setNewCategoryName("");
-    setShowAddCategory(false);
-    toast({
-      title: "Category Added",
-      description: `Added new category: ${newCategoryName}`,
-    });
-  };
-
-  const addNewSubcategory = (categoryKey: string) => {
-    if (!newSubcategoryName.trim()) return;
-    const newData = {
-      ...customMatrixData,
-      [categoryKey]: {
-        ...customMatrixData[categoryKey],
-        [newSubcategoryName.toLowerCase()]: ["new item"]
-      }
-    };
-    saveMatrixData(newData);
-    setNewSubcategoryName("");
-    setShowAddSubcategory("");
-    toast({
-      title: "Subcategory Added",
-      description: `Added new subcategory: ${newSubcategoryName}`,
-    });
-  };
-
-  const addNewItem = (categoryKey: string, subcategoryKey: string) => {
-    const itemKey = `${categoryKey}-${subcategoryKey}`;
-    const itemText = newItemTexts[itemKey];
-    if (!itemText?.trim()) return;
-    const newData = {
-      ...customMatrixData,
-      [categoryKey]: {
-        ...customMatrixData[categoryKey],
-        [subcategoryKey]: [
-          ...customMatrixData[categoryKey][subcategoryKey],
-          itemText
-        ]
-      }
-    };
-    saveMatrixData(newData);
-    setNewItemTexts(prev => ({...prev, [itemKey]: ""}));
-    toast({
-      title: "Item Added",
-      description: `Added: ${itemText}`,
-    });
-  };
-
-  const updateNewItemText = useCallback((categoryKey: string, subcategoryKey: string, value: string) => {
-    const itemKey = `${categoryKey}-${subcategoryKey}`;
-    setNewItemTexts(prev => ({...prev, [itemKey]: value}));
-  }, []);
-
-  const removeItem = (categoryKey: string, subcategoryKey: string, itemIndex: number) => {
-    const newData = {
-      ...customMatrixData,
-      [categoryKey]: {
-        ...customMatrixData[categoryKey],
-        [subcategoryKey]: customMatrixData[categoryKey][subcategoryKey].filter((_: any, i: number) => i !== itemIndex)
-      }
-    };
-    saveMatrixData(newData);
-    toast({
-      title: "Item Removed",
-      description: "Item has been removed",
-    });
-  };
-
-  const resetMatrixData = () => {
-    saveMatrixData(sceneMatrixData);
-    toast({
-      title: "Reset Complete",
-      description: "Scene matrix has been reset to defaults",
-    });
-  };
 
   // Download Scene Matrix data as JSON file
   const downloadMatrixData = () => {
@@ -1385,114 +1270,6 @@ function SceneBuilder() {
       </Popover>
     );
   }
-
-  // CategorySection component for Scene Matrix
-  const CategorySection = React.memo(function CategorySection({ 
-    title, 
-    data, 
-    icon,
-    onSelect,
-    categoryKey
-  }: { 
-    title: string; 
-    data: Record<string, string[]>; 
-    icon: React.ReactNode;
-    onSelect: (item: string) => void;
-    categoryKey: string;
-  }) {
-    const [searchTerm, setSearchTerm] = useState("");
-    const [selectedSubcategory, setSelectedSubcategory] = useState<string>(Object.keys(data)[0]);
-
-    // When searching, look across ALL groups in this category (previously the
-    // search silently only covered the selected group).
-    const query = searchTerm.toLowerCase();
-    const filteredItems = query
-      ? Object.entries(data).flatMap(([group, items]) =>
-          items.filter((item) => item.toLowerCase().includes(query)).map((item) => item)
-        )
-      : (data[selectedSubcategory] || []);
-
-    return (
-      <Card className="h-full">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 justify-between">
-            <div className="flex items-center gap-2">
-              {icon}
-              {title}
-            </div>
-            {isEditingMatrix && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAddSubcategory(categoryKey)}
-                data-testid={`button-add-subcategory-${categoryKey}`}
-              >
-                <Plus className="h-3 w-3 mr-1" />
-                Add Group
-              </Button>
-            )}
-          </CardTitle>
-          <CardDescription>
-            {isEditingMatrix ? "Edit mode: Add items, groups, or click items to remove them." : "Click any item to copy it to your clipboard."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search items..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-8"
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-1 mb-4">
-            {Object.keys(data).map((subcategory) => (
-              <Button
-                key={subcategory}
-                variant={selectedSubcategory === subcategory ? "default" : "outline"}
-                size="sm"
-                onClick={() => setSelectedSubcategory(subcategory)}
-                className="capitalize"
-              >
-                {subcategory}
-              </Button>
-            ))}
-          </div>
-
-
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-96 overflow-y-auto">
-            {filteredItems.map((item, index) => (
-              <Button
-                key={index}
-                variant="ghost"
-                size="sm"
-                onClick={() => isEditingMatrix ? removeItem(categoryKey, selectedSubcategory, index) : onSelect(item)}
-                className={`h-auto p-2 text-left justify-start break-words whitespace-normal ${
-                  isEditingMatrix ? "hover:bg-destructive hover:text-destructive-foreground" : ""
-                }`}
-                title={isEditingMatrix ? `Click to remove: ${item}` : `Click to copy: ${item}`}
-              >
-                <span className="text-xs">{item}</span>
-                {isEditingMatrix && (
-                  <X className="h-3 w-3 ml-1 flex-shrink-0" />
-                )}
-              </Button>
-            ))}
-          </div>
-
-          {filteredItems.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground">
-              No items found matching "{searchTerm}"
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    );
-  });
 
   return (
     <Card className="min-h-screen">
@@ -2958,89 +2735,6 @@ function SceneBuilder() {
           </DialogContent>
         </Dialog>
 
-        {/* Dialog for adding new category */}
-        <Dialog open={showAddCategory} onOpenChange={setShowAddCategory}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Category</DialogTitle>
-              <DialogDescription>
-                Create a new category for organizing your scene elements.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="new-category-name">Category Name</Label>
-                <Input
-                  id="new-category-name"
-                  placeholder="Enter category name (e.g., 'weather', 'mood')"
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  data-testid="input-new-category-name"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowAddCategory(false);
-                    setNewCategoryName("");
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={addNewCategory}
-                  disabled={!newCategoryName.trim()}
-                  data-testid="button-confirm-add-category"
-                >
-                  Add Category
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Dialog for adding new subcategory */}
-        <Dialog open={!!showAddSubcategory} onOpenChange={() => setShowAddSubcategory("")}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Group</DialogTitle>
-              <DialogDescription>
-                Add a new group to the "{showAddSubcategory}" category.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="new-subcategory-name">Group Name</Label>
-                <Input
-                  id="new-subcategory-name"
-                  placeholder="Enter group name (e.g., 'vintage', 'modern')"
-                  value={newSubcategoryName}
-                  onChange={(e) => setNewSubcategoryName(e.target.value)}
-                  data-testid="input-new-subcategory-name"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowAddSubcategory("");
-                    setNewSubcategoryName("");
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => addNewSubcategory(showAddSubcategory)}
-                  disabled={!newSubcategoryName.trim()}
-                  data-testid="button-confirm-add-subcategory"
-                >
-                  Add Group
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
       </CardContent>
     </Card>
   );
