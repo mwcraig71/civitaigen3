@@ -1323,8 +1323,8 @@ export default function ImageGallery({
                   </div>
                 )}
 
-                {/* Overlay Actions */}
-                {!isMultiSelectMode && (
+                {/* Overlay Actions — hidden for video cards (play badge is the only affordance) */}
+                {!isMultiSelectMode && !(generation as any).videoUrl && (
                   <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-60 transition-all flex items-center justify-center">
                     <div className="opacity-0 group-hover:opacity-100 transition-opacity flex space-x-2">
                       <Button
@@ -1375,9 +1375,9 @@ export default function ImageGallery({
                   </div>
                 )}
 
-                {/* Play badge — rendered AFTER the hover overlay so it sits above it in the stacking order */}
+                {/* Play badge — always visible; no action buttons compete with it on video cards */}
                 {!isMultiSelectMode && (generation as any).videoUrl && (
-                  <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none group-hover:opacity-0 transition-opacity">
+                  <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
                     <div className="bg-black/55 backdrop-blur-sm rounded-full w-12 h-12 flex items-center justify-center">
                       <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M8 5v14l11-7z"/>
