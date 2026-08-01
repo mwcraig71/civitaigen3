@@ -40,6 +40,22 @@ import { ActiveGenerationsProgress } from './generation-panel/active-generations
 import { PendingPlaceholdersGrid } from './generation-panel/pending-placeholders-grid';
 import { CommunityHighlights } from './generation-panel/community-highlights';
 import { AIEnhancementDialog } from './generation-panel/ai-enhancement-dialog';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+
+/**
+ * Client-side mirror of the server's detectModelFamily.
+ * Returns "pony" | "flux" | "krea2".
+ */
+function detectModelFamily(
+  baseModel: string | null | undefined,
+  modelName: string | null | undefined,
+): "pony" | "flux" | "krea2" {
+  const bm = (baseModel || '').toLowerCase();
+  const nm = (modelName || '').toLowerCase();
+  if (nm.includes('krea') || bm.includes('krea')) return 'krea2';
+  if (bm.includes('flux') || nm.includes('flux')) return 'flux';
+  return 'pony';
+}
 
 // Schema moved to shared useGenerationSettings hook
 // DIFFUS_MODEL_NAME, qualityWords and quick-tag defaults moved to ./generation-panel/constants
@@ -191,18 +207,6 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
     model.type?.toLowerCase() === 'checkpoint'
   );
   const modelsLoading = favoritesLoading || allModelsLoading;
-
-  // Reactively detect the prompt style family for the currently selected model.
-  // Mirrors the server-side detectModelFamily() logic from gemini-service.ts.
-  const watchedModelId = form.watch('modelId');
-  const enhanceModelFamily = useMemo(() => {
-    const m = allModels.find((m: Model) => m.id === watchedModelId);
-    const bm = (m?.baseModel || '').toLowerCase();
-    const nm = (m?.name || '').toLowerCase();
-    if (nm.includes('krea') || bm.includes('krea')) return 'krea2' as const;
-    if (bm.includes('flux') || nm.includes('flux')) return 'flux' as const;
-    return 'pony' as const;
-  }, [watchedModelId, allModels]);
 
   // Fetch current image provider setting (CivitAI or Diffus)
   const { data: imageProviderStatus } = useQuery<{ provider: string; diffusAvailable: boolean }>({
@@ -1081,6 +1085,25 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
   // AI Prompt Enhancement
   const [shotStyle, setShotStyle] = useState<'best' | 'candid'>('best');
   const [enhanceDirection, setEnhanceDirection] = useState('');
+
+  // Reactively compute prompt style label from the currently selected model.
+  const watchedModelId = form.watch('modelId');
+  const promptStyleInfo = useMemo(() => {
+    const model = allModels.find((m: Model) => m.id === watchedModelId);
+    const family = detectModelFamily(model?.baseModel, model?.name);
+    if (family === 'flux' || family === 'krea2') {
+      return {
+        label: 'Natural language',
+        tooltip: 'This model uses flowing natural-language prose prompts, not tag lists.',
+        colorClass: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+      };
+    }
+    return {
+      label: 'Pony style',
+      tooltip: 'This model uses booru/danbooru-style comma-separated tag prompts.',
+      colorClass: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+    };
+  }, [watchedModelId, allModels]);
   const aiEnhanceMutation = useMutation({
     mutationFn: async (request: any) => {
       console.log('📤 Sending AI enhancement request:', request);
@@ -2823,20 +2846,21 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                           )}
                           AI Enhance
                         </Button>
-                        <span
-                          className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium select-none ${
-                            enhanceModelFamily === 'pony'
-                              ? 'bg-purple-900/40 text-purple-300 border border-purple-600/40'
-                              : 'bg-emerald-900/40 text-emerald-300 border border-emerald-600/40'
-                          }`}
-                          title={
-                            enhanceModelFamily === 'pony'
-                              ? 'AI Enhance will produce Pony/danbooru tag-style prompts for this model'
-                              : 'AI Enhance will produce natural-language prose for this model'
-                          }
-                        >
-                          {enhanceModelFamily === 'pony' ? 'Pony tags' : 'Natural language'}
-                        </span>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span
+                                className={`inline-flex items-center h-5 px-1.5 rounded border text-[10px] font-medium cursor-default select-none ${promptStyleInfo.colorClass}`}
+                                data-testid="badge-prompt-style"
+                              >
+                                {promptStyleInfo.label}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-[220px] text-center">
+                              {promptStyleInfo.tooltip}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                         <Button
                           type="button"
                           variant="ghost"
