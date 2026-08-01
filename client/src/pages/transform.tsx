@@ -57,9 +57,9 @@ export default function Transform() {
   const [negativePrompt, setNegativePrompt] = useState("");
   // img2img runs on Flux 2 "Klein" (Civitai-hosted). Klein bands: CFG 1–20
   // (sweet spot 4–6, default 5), steps 4–50 (default 20). denoise maps to
-  // Klein's `strength` (0.6–0.8 keeps composition).
+  // Klein's `strength` (0=keep source, 1=discard; 0.3–0.5 preserves composition).
   const [kleinVersion, setKleinVersion] = useState<"4b" | "9b">("4b");
-  const [denoise, setDenoise] = useState(0.7);
+  const [denoise, setDenoise] = useState(0.4);
   const [steps, setSteps] = useState(20);
   const [cfg, setCfg] = useState(5);
 

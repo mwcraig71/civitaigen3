@@ -166,10 +166,12 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
         try {
           const objStoreSvc = new ObjectStorageService();
           effectiveSourceUrl = await objStoreSvc.getSignedReadUrl(parsed.sourceImageObjectPath, 24 * 3600);
+          logger.info(`🖼️ Minted fresh signed URL for source image (host: ${new URL(effectiveSourceUrl).hostname})`);
         } catch (e) {
           logger.warn("⚠️ Failed to mint fresh signed URL from objectPath; using provided URL", e);
         }
       }
+      logger.info(`📤 Submitting ${parsed.mode} with effectiveSourceUrl host: ${(() => { try { return new URL(effectiveSourceUrl).hostname; } catch { return String(effectiveSourceUrl).slice(0, 60); } })()}`);
 
       // Record the source image upload for admin visibility (5-day retention).
       let sourceUploadId: string | undefined;

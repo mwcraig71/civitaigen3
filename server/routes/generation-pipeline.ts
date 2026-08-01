@@ -1084,7 +1084,6 @@ function friendlyGenerationError(raw: string): string {
       attempts: number,
       lastProgressTime: number,
       processedImages: Set<string>,
-      consecutiveEmptyResults: number,
       timeoutId?: NodeJS.Timeout,
       apiKey?: string,  // Store the API key used to create this job
       delayWarningSent?: boolean,  // Track if delay warning has been sent
@@ -1114,8 +1113,7 @@ function friendlyGenerationError(raw: string): string {
         attempts: 0,
         lastProgressTime: Date.now(),
         processedImages: new Set<string>(),
-        consecutiveEmptyResults: 0,
-        apiKey: userApiKey,  // CRITICAL FIX: Store the API key used to create this job
+        apiKey: userApiKey,  // Store the API key used to create this job
         delayWarningSent: false  // Track if we've sent the 3-minute delay warning
       };
 
@@ -1473,60 +1471,51 @@ function friendlyGenerationError(raw: string): string {
             }
           }
           
-          // Reset empty results counter when we have results
-          pollerInfo.consecutiveEmptyResults = 0;
         } else if (status.jobs && status.jobs[0] && status.jobs[0].scheduled === false && !status.jobs[0].result) {
-          // CRITICAL FIX: Detect terminal failure - job not scheduled but has no results
-          pollerInfo.consecutiveEmptyResults++;
-          logger.info(`⚠️ Job has scheduled:false but no results (${pollerInfo.consecutiveEmptyResults} consecutive empty responses)`);
-          
-          // After 10 consecutive empty results, mark as terminal failure
-          if (pollerInfo.consecutiveEmptyResults >= 10) {
-            logger.info(`❌ Terminal failure detected: Job has scheduled:false with no results after ${pollerInfo.consecutiveEmptyResults} attempts`);
-            
-            // Mark all generations as failed in database
-            for (const generationId of pollerInfo.generations) {
-              try {
-                await storage.updateGenerationStatus(generationId, "failed");
-                logger.info(`✅ Marked generation ${generationId} as failed in database (terminal empty result)`);
-                
-                // Refund credits for transform jobs whose tracker carries a cost.
-                const bt = batchTracker.get(generationId) as any;
-                if (bt?.transformCost && bt?.userId) {
-                  try {
-                    const u = await storage.getUser(bt.userId);
-                    if (u) await storage.updateUserCredits(bt.userId, (u.buzzCredits || 0) + bt.transformCost);
-                    logger.info(`💰 Refunded ${bt.transformCost} Buzz to ${bt.userId} (terminal empty)`);
-                  } catch (rfErr) { logger.error("Refund failed:", rfErr); }
-                }
+          // Terminal failure: CivitAI reported a final failure state (failed/expired/canceled)
+          // and getWorkflowStatus deliberately omits `result`. Stop immediately — no grace window.
+          logger.info(`❌ Terminal failure detected: Job has scheduled:false with no results — stopping immediately`);
 
-                // Clean up batch tracker
-                if (batchTracker.has(generationId)) {
-                  batchTracker.delete(generationId);
-                  logger.info(`🧹 Cleaned up batch tracker for ${generationId}`);
-                }
-              } catch (dbError) {
-                logger.error(`❌ Failed to update database for generation ${generationId}:`, dbError);
+          // Mark all generations as failed in database
+          for (const generationId of pollerInfo.generations) {
+            try {
+              await storage.updateGenerationStatus(generationId, "failed");
+              logger.info(`✅ Marked generation ${generationId} as failed in database (terminal failure)`);
+
+              // Refund credits for transform jobs whose tracker carries a cost.
+              const bt = batchTracker.get(generationId) as any;
+              if (bt?.transformCost && bt?.userId) {
+                try {
+                  const u = await storage.getUser(bt.userId);
+                  if (u) await storage.updateUserCredits(bt.userId, (u.buzzCredits || 0) + bt.transformCost);
+                  logger.info(`💰 Refunded ${bt.transformCost} Buzz to ${bt.userId} (terminal failure)`);
+                } catch (rfErr) { logger.error("Refund failed:", rfErr); }
               }
-              
-              // Notify user
-              for (const userId of pollerInfo.users) {
-                broadcastToUser(userId, {
-                  type: "generation_update",
-                  generationId,
-                  status: "failed",
-                  progress: 0,
-                  message: "Generation failed - CivitAI returned no results"
-                });
+
+              // Clean up batch tracker
+              if (batchTracker.has(generationId)) {
+                batchTracker.delete(generationId);
               }
+            } catch (dbError) {
+              logger.error(`❌ Failed to update database for generation ${generationId}:`, dbError);
             }
-            
-            this.cleanup(token);
-            return;
+
+            // Notify user
+            for (const userId of pollerInfo.users) {
+              broadcastToUser(userId, {
+                type: "generation_update",
+                generationId,
+                status: "failed",
+                progress: 0,
+                message: "Generation failed - CivitAI returned no results",
+              });
+            }
           }
+
+          this.cleanup(token);
+          return;
         } else {
-          // Reset counter if we get any other status
-          pollerInfo.consecutiveEmptyResults = 0;
+          // No special case — job still running or status unknown.
         }
 
         // Check timeout conditions - CivitAI queues can be 20-30 min during peak load

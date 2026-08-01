@@ -320,8 +320,15 @@ export class CivitAIOrchestrationService {
     if (!fetchRes.ok) {
       throw new Error(`Failed to fetch source image (${fetchRes.status})`);
     }
-    const contentType = fetchRes.headers.get("content-type") || "image/png";
+    // Normalise content-type: GCS signed URLs may return application/octet-stream
+    // for uploads that lacked an explicit type. CivitAI's blob endpoint accepts
+    // image/* types — coerce to image/jpeg when the type is generic.
+    const rawContentType = fetchRes.headers.get("content-type") || "";
+    const contentType = rawContentType.startsWith("image/")
+      ? rawContentType.split(";")[0].trim()
+      : "image/jpeg";
     const buf = Buffer.from(await fetchRes.arrayBuffer());
+    logger.info(`📥 Fetched source image: ${buf.length} bytes, content-type: ${contentType}`);
 
     // Push it into CivitAI's blob store. Their blob endpoint intermittently
     // returns 5xx (often with an empty body) under load, same as the workflows
@@ -820,10 +827,23 @@ export class CivitAIOrchestrationService {
       });
     }
 
-    // If terminal-failed with no media, emit a `scheduled:false, result:[]`
-    // shape so the poller's terminal-failure detector fires after its grace
-    // window instead of polling forever.
+    // If terminal-failed with no media, log the CivitAI error reason and emit
+    // a `scheduled:false, result:[]` shape so the poller stops immediately.
     if (stepStatus === "failed" || stepStatus === "expired" || stepStatus === "canceled") {
+      const errReason =
+        step.error ||
+        step.failureReason ||
+        step.errorMessage ||
+        wf.error ||
+        wf.failureReason ||
+        wf.errorMessage ||
+        step.output?.error ||
+        "(no error detail in step/wf fields)";
+      // Log the full step body to aid diagnosis (trim very long blobs).
+      const stepSnapshot = JSON.stringify(step).slice(0, 800);
+      logger.error(
+        `❌ CivitAI workflow ${workflowId.substring(0, 20)} ${stepStatus}: ${errReason} | step=${stepSnapshot}`
+      );
       // Omit `result` (not just empty-array it) — the BatchPoller's terminal-
       // failure detector checks `!jobs[0].result`, so an empty array would
       // be truthy and the poller would never give up.
