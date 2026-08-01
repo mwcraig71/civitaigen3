@@ -140,16 +140,21 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
       let baseModel: string | undefined;
       let resolvedModelId: string | undefined;
       if (parsed.mode === "img2img") {
-        if (!parsed.modelId) {
-          return res.status(400).json({ message: "Please select a checkpoint model" });
+        // modelId is optional — img2img always runs on Flux 2 Klein regardless
+        // of any checkpoint selection. Resolve it only when provided (purely for
+        // generation record metadata / gallery display).
+        if (parsed.modelId) {
+          const model = await storage.getModel(parsed.modelId);
+          if (model) {
+            baseModel = model.baseModel || "";
+            resolvedModelId = model.id;
+            modelArn = model.arn || undefined;
+          }
         }
-        const model = await storage.getModel(parsed.modelId);
-        if (!model) {
-          return res.status(400).json({ message: "Model not found" });
+        // Fallback display values so the gallery shows something sensible.
+        if (!resolvedModelId) {
+          baseModel = baseModel || "flux2";
         }
-        baseModel = model.baseModel || "";
-        resolvedModelId = model.id;
-        modelArn = model.arn || undefined; // metadata only; not used by Klein img2img
       }
 
       // If the client sent a durable object path, mint a fresh signed URL now

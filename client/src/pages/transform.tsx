@@ -28,7 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { apiRequest } from "@/lib/queryClient";
-import type { Model, Generation, User as UserType } from "@/types";
+import type { Generation, User as UserType } from "@/types";
 
 type Mode = "img2img" | "img2vid";
 
@@ -55,11 +55,9 @@ export default function Transform() {
   const [uploading, setUploading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
-  const [modelId, setModelId] = useState<string>("");
-
-  // img2img runs on Flux 2 "Klein" (Civitai-hosted) regardless of the selected
-  // checkpoint. Klein bands: CFG 1–20 (sweet spot 4–6, default 5), steps 4–50
-  // (default 20). denoise maps to Klein's `strength` (0.6–0.8 keeps composition).
+  // img2img runs on Flux 2 "Klein" (Civitai-hosted). Klein bands: CFG 1–20
+  // (sweet spot 4–6, default 5), steps 4–50 (default 20). denoise maps to
+  // Klein's `strength` (0.6–0.8 keeps composition).
   const [denoise, setDenoise] = useState(0.7);
   const [steps, setSteps] = useState(20);
   const [cfg, setCfg] = useState(5);
@@ -72,22 +70,6 @@ export default function Transform() {
 
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<Generation | null>(null);
-
-  // Load checkpoint models for img2img selector
-  const { data: allModels } = useQuery<Model[]>({
-    queryKey: ["/api/models?type=Checkpoint&limit=50"],
-  });
-
-  // Only show models that came from CivitAI (have a civitaiId). These are the
-  // models CivitAI orchestration can work with. The selection is stored as
-  // generation metadata; img2img itself runs on Flux 2 Klein.
-  const models = allModels?.filter((m) => !!m.civitaiId);
-
-  // Default img2img checkpoint to the first model that loads.
-  useEffect(() => {
-    if (modelId || !models?.length) return;
-    setModelId(models[0].id);
-  }, [models, modelId]);
 
   // Poll active job when present (small interval — WS handles fast path)
   const { data: jobData } = useQuery<Generation>({
@@ -192,8 +174,6 @@ export default function Transform() {
     mutationFn: async () => {
       if (!sourceImageUrl) throw new Error("Please upload a source image first");
       if (!prompt.trim()) throw new Error("Please describe what you want");
-      if (mode === "img2img" && !modelId) throw new Error("Please pick a checkpoint model");
-
       const body: any = {
         mode,
         sourceImageUrl,
@@ -203,7 +183,6 @@ export default function Transform() {
       };
       if (mode === "img2img") {
         Object.assign(body, {
-          modelId,
           denoiseStrength: denoise,
           steps,
           cfgScale: cfg,
@@ -395,20 +374,9 @@ export default function Transform() {
                 </TabsList>
 
                 <TabsContent value="img2img" className="space-y-4 pt-4">
-                  <div>
-                    <Label>Checkpoint Model</Label>
-                    <Select value={modelId} onValueChange={setModelId}>
-                      <SelectTrigger className="bg-[hsl(240,25%,10%)] border-[hsl(180,50%,20%)]" data-testid="select-model">
-                        <SelectValue placeholder="Pick a checkpoint" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[hsl(240,25%,8%)] border-[hsl(180,50%,20%)] max-h-72">
-                        {models?.map((m) => (
-                          <SelectItem key={m.id} value={m.id}>
-                            {m.name} {m.baseModel ? `· ${m.baseModel}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-[hsl(240,25%,10%)] border border-[hsl(180,50%,20%)] text-sm text-slate-400">
+                    <Sparkles className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                    <span>Powered by <span className="text-cyan-300 font-medium">Flux 2 Klein (4b)</span></span>
                   </div>
                   <div>
                     <Label>Denoise Strength: {denoise.toFixed(2)}</Label>
