@@ -1,6 +1,12 @@
 import type { Express } from "express";
 import { logger } from "../logger";
 import { requireAdmin } from "../middleware";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
+const execFileAsync = promisify(execFile);
 import { getVapidPublicKey, saveSubscription, removeSubscription, sendPushToUser, pushEnabled } from "../push";
 import { randomUUID } from "crypto";
 import { createServer, type Server } from "http";
@@ -733,6 +739,42 @@ function friendlyGenerationError(raw: string): string {
     }
   }
 
+  // Extract the first video frame as a base64 JPEG data URL using ffmpeg.
+  // Returns undefined on any error so callers can fall back to other thumbnails.
+  async function extractVideoFirstFrame(videoUrl: string, generationId: string): Promise<string | undefined> {
+    const tmpVid = path.join(os.tmpdir(), `civiv-vid-${generationId}.mp4`);
+    const tmpThumb = path.join(os.tmpdir(), `civiv-thumb-${generationId}.jpg`);
+    try {
+      // Download video to temp file
+      const res = await fetch(videoUrl, { signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) {
+        logger.warn(`⚠️ Could not download video for thumbnail (${res.status}): ${videoUrl.substring(0, 80)}`);
+        return undefined;
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      await fs.writeFile(tmpVid, buf);
+
+      // Extract first frame with ffmpeg
+      await execFileAsync("ffmpeg", [
+        "-y", "-ss", "0.001", "-i", tmpVid,
+        "-vframes", "1", "-vf", "scale=640:-2",
+        "-q:v", "4", tmpThumb,
+      ]);
+
+      const thumbBuf = await fs.readFile(tmpThumb);
+      const dataUrl = `data:image/jpeg;base64,${thumbBuf.toString("base64")}`;
+      logger.info(`🖼️ Extracted first-frame thumbnail for ${generationId} (${thumbBuf.length} bytes)`);
+      return dataUrl;
+    } catch (err: any) {
+      logger.warn(`⚠️ First-frame thumbnail extraction failed for ${generationId}: ${err?.message}`);
+      return undefined;
+    } finally {
+      // Clean up temp files (best-effort)
+      fs.unlink(tmpVid).catch(() => {});
+      fs.unlink(tmpThumb).catch(() => {});
+    }
+  }
+
   // Process an individual video result from a transform img2vid job.
   // Stores the mp4 in object storage and updates the generation row.
   async function processIndividualVideo(result: any, originalGenerationId: string, userId: string, requestMetadata: any) {
@@ -749,7 +791,6 @@ function friendlyGenerationError(raw: string): string {
       }
 
       const videoUrl: string = result.blobUrl || result.url || result.videoUrl;
-      const thumbnailUrl: string | undefined = result.thumbnailUrl || result.previewUrl || original.sourceImageUrl || undefined;
 
       if (!videoUrl) {
         logger.error(`❌ Video result has no URL for ${originalGenerationId}`, result);
@@ -757,6 +798,15 @@ function friendlyGenerationError(raw: string): string {
       }
 
       logger.info(`🎥 Storing video for ${originalGenerationId} from ${videoUrl.substring(0, 80)}...`);
+
+      // Extract first frame as thumbnail (best-effort; falls back to source image).
+      const firstFrameDataUrl = await extractVideoFirstFrame(videoUrl, originalGenerationId);
+      const thumbnailUrl: string | undefined =
+        firstFrameDataUrl ||
+        result.thumbnailUrl ||
+        result.previewUrl ||
+        (original as any).sourceImageUrl ||
+        undefined;
 
       // Update the generation with the video URL immediately so the user
       // sees the result. Background persistence to object storage can run
