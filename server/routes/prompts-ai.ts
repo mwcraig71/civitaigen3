@@ -10,7 +10,7 @@ import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseOb
 import { civitaiService, CivitAIService } from "../civitai-service";
 import { diffusService, DiffusService } from "../diffus-service";
 import { recoveryService } from '../recovery-service';
-import { GeminiService, type AIPromptRequest } from "../gemini-service";
+import { GeminiService, detectModelFamily, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
 import { ErrorLogger } from "../error-logger";
 import { insertGenerationSchema, insertFavoriteSchema, insertModelLikeSchema, insertCharacterSchema, insertQualityGroupSchema, insertSavedSceneSchema, insertSavedPromptSchema, insertSignupPromotionSchema, insertCreditPackageSchema, insertCreditTransactionSchema, insertEventSchema, insertEventStepSchema, insertFavoritePromptWordSchema, transformRequestSchema, generations, models } from "@shared/schema";
@@ -125,11 +125,17 @@ export function registerPromptsAiRoutes(app: Express, ctx: RouteContext) {
   // Generate AI Prompts from Traits
   app.post("/api/generate-prompts", async (req, res) => {
     try {
-      const { traits, creativeFlair } = req.body;
+      const { traits, creativeFlair, baseModel, modelName } = req.body;
+      
+      // Detect model family to choose the right prompt style
+      const modelFamily = detectModelFamily(baseModel, modelName);
+      const isNaturalLanguage = modelFamily === 'flux' || modelFamily === 'krea2';
       
       logger.info('🎨 Prompt generation request:', {
         traitsCount: traits?.length || 0,
-        creativeFlair
+        creativeFlair,
+        modelFamily,
+        isNaturalLanguage
       });
 
       if (!traits || !Array.isArray(traits) || traits.length === 0) {
@@ -138,7 +144,33 @@ export function registerPromptsAiRoutes(app: Express, ctx: RouteContext) {
         });
       }
 
-      let masterPrompt = `You are an AI assistant that specializes in creating high-quality, effective prompts for the PONY image generation model. Your task is to take a list of user-selected traits for a female character and generate a JSON array of 10 diverse, detailed, and evocative prompts, each approximately 100 words long.
+      let masterPrompt: string;
+
+      if (isNaturalLanguage) {
+        // Flux / Krea2: natural-language prose prompts
+        masterPrompt = `You are an AI assistant that specializes in creating high-quality, effective prompts for natural-language image generation models like Flux and Krea2. Your task is to take a list of user-selected traits for a female character and generate a JSON array of 10 diverse, detailed, and evocative prompts written in flowing natural-language prose.
+
+**RULES:**
+1.  **Natural Language Only:** Write in flowing, descriptive prose — full sentences and short paragraphs. DO NOT use comma-separated booru/danbooru tag lists. DO NOT use booru vocabulary (no "1girl", "looking at viewer", "masterpiece", "best quality", "highly detailed", "8k", "4k", "absurdres").
+2.  **No Score Tokens:** DO NOT include any score_ tokens (score_9, score_8_up, etc.) — they mean nothing to these models.
+3.  **No Parenthetical Weights:** DO NOT use emphasis weighting like "(green eyes:1.2)" — it is completely ignored and degrades output quality.
+4.  **Creative Extrapolation:** You MUST take creative liberty. For any trait categories the user has NOT selected (e.g., hair style, eye color, skin details), intelligently extrapolate and add fitting details based on the traits that WERE provided. Create a complete, vivid portrait in each prompt.
+5.  **Realism and Imperfection:** ALWAYS include small, natural imperfections to enhance realism — beauty marks, moles, faint freckles, flyaway hairs, slightly asymmetrical features. Distribute these across the 10 prompts.
+6.  **Varied Appearance:** DO NOT assume every character is conventionally beautiful. Actively create a range of appearances — some prompts should describe characters who are more "homely," "nerdy," or "average-looking."
+7.  **Outfit Selection:** If an outfit is provided, describe it naturally. If NOT provided, creatively select and describe one that fits the character's aesthetic.
+8.  **Lighting Selection:** If a lighting style is provided, use it naturally in prose. If not, creatively choose and describe a lighting scenario that enhances the mood.
+9.  **Framing:** Describe framing and composition naturally in prose: "a tightly framed close-up portrait", "full-body shot", "shot from slightly below eye level." Do NOT use tag-style framing terms.
+10. **Focus on Subject:** Prompts must only describe the female character and her immediate presentation — no scene or background storytelling.
+11. **Length:** Each prompt should be 3–5 descriptive sentences, rich with visual detail.
+12. **Diversity:** The 10 prompts must be unique. Vary phrasing, your creative extrapolations, framing, and overall aesthetic.
+13. **Output Format:** The final output must be a single, clean JSON array of strings, with nothing before or after it.`;
+
+        if (creativeFlair) {
+          masterPrompt += `\n14. **Creative Flair:** Since the user requested it, weave in a touch of surrealism, fantasy, or unexpected artistic elements described naturally in prose.`;
+        }
+      } else {
+        // Pony / SD: booru-tag style prompts
+        masterPrompt = `You are an AI assistant that specializes in creating high-quality, effective prompts for the PONY image generation model. Your task is to take a list of user-selected traits for a female character and generate a JSON array of 10 diverse, detailed, and evocative prompts, each approximately 100 words long.
 
 **RULES:**
 1.  **Creative Extrapolation:** You MUST take creative liberty. For any trait categories the user has NOT selected (e.g., hair style, eye color, skin details), you must intelligently extrapolate and add fitting details based on the traits that WERE provided. Create a complete, vivid portrait of the character in each prompt. The goal is to provide rich, varied descriptions that go beyond the user's simple inputs.
@@ -153,8 +185,9 @@ export function registerPromptsAiRoutes(app: Express, ctx: RouteContext) {
 10. **Diversity:** The 10 prompts must be unique. Vary the phrasing, your creative extrapolations, and the character's overall aesthetic to give the user a range of creative options.
 11. **Output Format:** The final output must be a single, clean JSON array of strings, with nothing before or after it.`;
 
-      if (creativeFlair) {
-        masterPrompt += `\n12. **Creative Flair:** Since the user requested it, add a touch of surrealism, fantasy, or unexpected artistic elements to each prompt to make them more unique and imaginative.`;
+        if (creativeFlair) {
+          masterPrompt += `\n12. **Creative Flair:** Since the user requested it, add a touch of surrealism, fantasy, or unexpected artistic elements to each prompt to make them more unique and imaginative.`;
+        }
       }
 
       masterPrompt += `\n\n**User Input Traits:**

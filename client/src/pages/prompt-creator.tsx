@@ -44,6 +44,13 @@ const traitData: TraitData = {
   "Expression": { multiSelect: false, traits: ["smiling", "laughing", "smirking", "serious", "thoughtful", "surprised", "winking", "serene"] }
 };
 
+type ModelStyle = 'pony' | 'flux';
+
+const MODEL_STYLE_OPTIONS: { value: ModelStyle; label: string; description: string }[] = [
+  { value: 'pony', label: 'Pony / SD (booru tags)', description: 'CyberRealistic Pony and other Pony/SD checkpoints' },
+  { value: 'flux', label: 'Flux / Krea2 (natural language)', description: 'Flux, Krea2, and other natural-language models' },
+];
+
 export default function PromptCreator() {
   const [selectedTraits, setSelectedTraits] = useState<{ [key: string]: string[] }>({});
   const [creativeFlair, setCreativeFlair] = useState(false);
@@ -51,6 +58,7 @@ export default function PromptCreator() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [imagesPerPrompt, setImagesPerPrompt] = useState<number>(1);
   const [isSendingToGenerator, setIsSendingToGenerator] = useState(false);
+  const [modelStyle, setModelStyle] = useState<ModelStyle>('pony');
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
@@ -176,7 +184,10 @@ export default function PromptCreator() {
     try {
       const response = await apiRequest('POST', '/api/generate-prompts', {
         traits: allTraits,
-        creativeFlair
+        creativeFlair,
+        // Pass baseModel so the server can detect the family and switch prompt style
+        baseModel: modelStyle === 'flux' ? 'Flux.1 D' : 'Pony',
+        modelName: modelStyle === 'flux' ? 'Flux' : 'CyberRealistic Pony',
       });
 
       const data = await response.json();
@@ -341,6 +352,31 @@ export default function PromptCreator() {
                   </span>
                 ))
               )}
+            </div>
+
+            {/* Model Style Selector */}
+            <div className="space-y-1">
+              <Label htmlFor="select-model-style" className="text-sm font-medium">
+                Prompt style
+              </Label>
+              <Select
+                value={modelStyle}
+                onValueChange={(value) => setModelStyle(value as ModelStyle)}
+              >
+                <SelectTrigger id="select-model-style" className="w-full" data-testid="select-model-style">
+                  <SelectValue placeholder="Select model style" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODEL_STYLE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      <div className="flex flex-col">
+                        <span>{opt.label}</span>
+                        <span className="text-xs text-muted-foreground">{opt.description}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Creative Flair Option */}
