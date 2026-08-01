@@ -58,6 +58,7 @@ export default function Transform() {
   // img2img runs on Flux 2 "Klein" (Civitai-hosted). Klein bands: CFG 1–20
   // (sweet spot 4–6, default 5), steps 4–50 (default 20). denoise maps to
   // Klein's `strength` (0.6–0.8 keeps composition).
+  const [kleinVersion, setKleinVersion] = useState<"4b" | "9b">("4b");
   const [denoise, setDenoise] = useState(0.7);
   const [steps, setSteps] = useState(20);
   const [cfg, setCfg] = useState(5);
@@ -183,6 +184,7 @@ export default function Transform() {
       };
       if (mode === "img2img") {
         Object.assign(body, {
+          kleinVersion,
           denoiseStrength: denoise,
           steps,
           cfgScale: cfg,
@@ -376,7 +378,43 @@ export default function Transform() {
                 <TabsContent value="img2img" className="space-y-4 pt-4">
                   <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-[hsl(240,25%,10%)] border border-[hsl(180,50%,20%)] text-sm text-slate-400">
                     <Sparkles className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
-                    <span>Powered by <span className="text-cyan-300 font-medium">Flux 2 Klein (4b)</span></span>
+                    <span>Powered by <span className="text-cyan-300 font-medium">Flux 2 Klein ({kleinVersion})</span></span>
+                  </div>
+
+                  {/* Quality tier toggle */}
+                  <div className="space-y-1.5">
+                    <Label>Quality</Label>
+                    <div className="flex rounded-md border border-[hsl(180,50%,20%)] overflow-hidden text-sm">
+                      <button
+                        type="button"
+                        onClick={() => setKleinVersion("4b")}
+                        className={`flex-1 px-3 py-2 transition-colors ${
+                          kleinVersion === "4b"
+                            ? "bg-cyan-500/20 text-cyan-300 font-medium"
+                            : "bg-[hsl(240,25%,10%)] text-slate-400 hover:text-slate-200"
+                        }`}
+                        data-testid="btn-klein-4b"
+                      >
+                        Klein 4b · Standard
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setKleinVersion("9b")}
+                        className={`flex-1 px-3 py-2 transition-colors border-l border-[hsl(180,50%,20%)] ${
+                          kleinVersion === "9b"
+                            ? "bg-purple-500/20 text-purple-300 font-medium"
+                            : "bg-[hsl(240,25%,10%)] text-slate-400 hover:text-slate-200"
+                        }`}
+                        data-testid="btn-klein-9b"
+                      >
+                        Klein 9b · High Quality
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {kleinVersion === "4b"
+                        ? "~12 Buzz · faster · good for most transforms"
+                        : "~24 Buzz · higher fidelity · 2× cost"}
+                    </p>
                   </div>
                   <div>
                     <Label>Denoise Strength: {denoise.toFixed(2)}</Label>

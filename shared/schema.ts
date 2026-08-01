@@ -777,6 +777,8 @@ export const transformRequestSchema = z.object({
   width: z.number().int().min(256).max(1536).optional(),
   height: z.number().int().min(256).max(1536).optional(),
   seed: z.number().int().optional(),
+  // img2img quality tier
+  kleinVersion: z.enum(["4b", "9b"]).optional().default("4b"),
   // img2vid params
   videoEngine: z.enum(["wan-comfy-2.1", "wan-fal-2.2", "wan-fal-2.5", "kling-2.5", "vidu-q3", "ltx-2", "grok-img2vid"]).optional().default("wan-comfy-2.1"),
   durationSeconds: z.number().int().min(3).max(5).optional().default(5),

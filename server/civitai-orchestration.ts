@@ -111,6 +111,8 @@ export interface Img2ImgInput {
   height?: number;
   seed?: number;
   loras?: Array<{ id: string; strength: number }>;
+  /** Klein size tier — "4b" (default, faster) or "9b" (higher fidelity, ~2× cost) */
+  kleinVersion?: "4b" | "9b";
 }
 
 export interface Img2VidInput {
@@ -484,7 +486,7 @@ export class CivitAIOrchestrationService {
       engine: "sdcpp",
       ecosystem: "flux2Klein",
       operation: "createVariant",            // strength-weighted img2img on Klein
-      modelVersion: "4b",                    // default Klein size tier
+      modelVersion: input.kleinVersion ?? "4b", // "4b" standard or "9b" high-fidelity
       prompt: input.prompt,
       negativePrompt: input.negativePrompt || "",
       width,

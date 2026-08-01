@@ -256,6 +256,7 @@ export function registerTransformRoutes(app: Express, ctx: RouteContext) {
                 width: parsed.width,
                 height: parsed.height,
                 seed: parsed.seed,
+                kleinVersion: parsed.kleinVersion as "4b" | "9b" | undefined,
               },
               userApiKey || undefined
             );
