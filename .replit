@@ -66,3 +66,7 @@ APP_DOMAINS = "72bbe586-9bec-4142-8c99-fa9296ea5556-00-1zf6ihnub0nb2.janeway.rep
 
 [userenv.production]
 APP_DOMAINS = "civitaigen-3.replit.app"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 60000

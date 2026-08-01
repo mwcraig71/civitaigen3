@@ -192,6 +192,18 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
   );
   const modelsLoading = favoritesLoading || allModelsLoading;
 
+  // Reactively detect the prompt style family for the currently selected model.
+  // Mirrors the server-side detectModelFamily() logic from gemini-service.ts.
+  const watchedModelId = form.watch('modelId');
+  const enhanceModelFamily = useMemo(() => {
+    const m = allModels.find((m: Model) => m.id === watchedModelId);
+    const bm = (m?.baseModel || '').toLowerCase();
+    const nm = (m?.name || '').toLowerCase();
+    if (nm.includes('krea') || bm.includes('krea')) return 'krea2' as const;
+    if (bm.includes('flux') || nm.includes('flux')) return 'flux' as const;
+    return 'pony' as const;
+  }, [watchedModelId, allModels]);
+
   // Fetch current image provider setting (CivitAI or Diffus)
   const { data: imageProviderStatus } = useQuery<{ provider: string; diffusAvailable: boolean }>({
     queryKey: ['/api/system/image-provider'],
@@ -2811,6 +2823,20 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                           )}
                           AI Enhance
                         </Button>
+                        <span
+                          className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium select-none ${
+                            enhanceModelFamily === 'pony'
+                              ? 'bg-purple-900/40 text-purple-300 border border-purple-600/40'
+                              : 'bg-emerald-900/40 text-emerald-300 border border-emerald-600/40'
+                          }`}
+                          title={
+                            enhanceModelFamily === 'pony'
+                              ? 'AI Enhance will produce Pony/danbooru tag-style prompts for this model'
+                              : 'AI Enhance will produce natural-language prose for this model'
+                          }
+                        >
+                          {enhanceModelFamily === 'pony' ? 'Pony tags' : 'Natural language'}
+                        </span>
                         <Button
                           type="button"
                           variant="ghost"
