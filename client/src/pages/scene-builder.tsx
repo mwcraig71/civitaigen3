@@ -224,6 +224,7 @@ function SceneBuilder() {
   };
 
   const posesByCategory = {
+    "Body / Physical Poses": sceneBuilderData.bodyPhysicalPoses,
     "The Mall & Retail": sceneBuilderData.theMallRetailPoses,
     "Home & Indoor Spaces": sceneBuilderData.homeIndoorSpacesPoses,
     "Nature & Parks": sceneBuilderData.natureParksPoses,
