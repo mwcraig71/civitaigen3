@@ -1262,6 +1262,14 @@ export default function ImageGallery({
                         onMouseEnter={(e) => { (e.currentTarget as HTMLVideoElement).play().catch(() => {}); }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLVideoElement).pause(); }}
                       />
+                      {/* Play badge — always visible so the card is obviously a video */}
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="bg-black/50 backdrop-blur-sm rounded-full w-12 h-12 flex items-center justify-center opacity-80 group-hover:opacity-0 transition-opacity">
+                          <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z"/>
+                          </svg>
+                        </div>
+                      </div>
                       <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-sm rounded px-2 py-0.5 text-[10px] uppercase tracking-wider text-[hsl(270,100%,75%)] font-[Orbitron,sans-serif] pointer-events-none">
                         Video
                       </div>

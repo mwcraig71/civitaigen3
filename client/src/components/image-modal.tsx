@@ -511,6 +511,7 @@ ${currentGeneration.imageUrl || 'Not available'}
                   poster={(currentGeneration as any).videoThumbnailUrl || currentGeneration.imageUrl || undefined}
                   controls
                   autoPlay
+                  muted
                   loop
                   playsInline
                   className="rounded-lg"
