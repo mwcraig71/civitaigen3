@@ -26,6 +26,11 @@ import type { SavedScene } from "@shared/schema";
 function SceneBuilder() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Remove stale localStorage key left over from the old Scene Matrix import/export feature
+  useEffect(() => {
+    localStorage.removeItem('customSceneMatrixData');
+  }, []);
   
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
   const [builtPrompt, setBuiltPrompt] = useState("");
