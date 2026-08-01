@@ -739,11 +739,19 @@ export class CivitAIOrchestrationService {
     const stepStatus: string = step.status || wf.status || "processing";
     const terminal = ["succeeded", "failed", "expired", "canceled"].includes(stepStatus);
 
+    // Log status transitions to aid debugging.
+    logger.info(`🎬 Workflow ${workflowId.substring(0, 20)} step status: ${stepStatus} (terminal: ${terminal})`);
+
     // Collect any media artifacts the step produced. CivitAI returns
     // `output.images` and/or `output.videos` depending on operation.
+    // Field names vary across WAN versions: check all known variants.
     const media: any[] = [];
     const outImages = step.output?.images || [];
-    const outVideos = step.output?.videos || step.output?.outputs || [];
+    const rawVideoOut = step.output?.videos
+      || step.output?.outputs
+      || step.output?.files
+      || (step.output?.video ? [step.output.video] : []);
+    const outVideos: any[] = Array.isArray(rawVideoOut) ? rawVideoOut : (rawVideoOut ? [rawVideoOut] : []);
 
     // In the v2 workflows API, output.images/videos only appear once the step
     // has produced them — the signed `url` IS the ready blob. The legacy v1

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
-import { Download, Eye, Star, Trash2, CheckSquare, Square, X, User, Filter, Calendar, ChevronDown, Users, Sparkles, Heart, UserPlus } from 'lucide-react';
+import { Download, Eye, Star, Trash2, CheckSquare, Square, X, User, Filter, Calendar, ChevronDown, Users, Sparkles, Heart, UserPlus, Loader2 } from 'lucide-react';
 
 // Helper to get the proper image URL that goes through the watermarking endpoint.
 // Used for downloads/saving, where the watermarked/stored copy is wanted.
@@ -220,12 +220,13 @@ export default function ImageGallery({
   // Filter out deleted generations using BOTH global store AND local ref
   // Global store is the definitive source of truth that NEVER clears
   // This ensures deleted images stay hidden even if WebSocket triggers a refetch
-  const completedGenerations = generations.filter(gen => 
-    gen.status === 'completed' && 
-    gen.imageUrl && 
-    !isGenerationDeleted(gen.id) &&
-    !pendingDeletionsRef.current.has(gen.id)
-  );
+  const completedGenerations = generations.filter(gen => {
+    if (isGenerationDeleted(gen.id) || pendingDeletionsRef.current.has(gen.id)) return false;
+    // Always show video jobs so users can see them processing and after completion.
+    if ((gen as any).generationType === 'img2vid') return true;
+    // Regular images: must be completed with an imageUrl.
+    return gen.status === 'completed' && !!gen.imageUrl;
+  });
 
   // Fetch models to get model details
   const { data: allModels = [] } = useQuery<Model[]>({
@@ -1261,6 +1262,31 @@ export default function ImageGallery({
                         onMouseEnter={(e) => { (e.currentTarget as HTMLVideoElement).play().catch(() => {}); }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLVideoElement).pause(); }}
                       />
+                      <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-sm rounded px-2 py-0.5 text-[10px] uppercase tracking-wider text-[hsl(270,100%,75%)] font-[Orbitron,sans-serif] pointer-events-none">
+                        Video
+                      </div>
+                    </>
+                  ) : (generation as any).generationType === 'img2vid' ? (
+                    // Video job in progress — show source image dimmed with a spinner
+                    <>
+                      {(generation as any).sourceImageUrl ? (
+                        <img
+                          src={(generation as any).sourceImageUrl}
+                          alt="Source image"
+                          className="w-full h-full object-cover opacity-30"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-slate-900" />
+                      )}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
+                        <Loader2 className="h-8 w-8 text-purple-400 animate-spin" />
+                        <span className="text-xs text-purple-300 font-medium tracking-wide">
+                          {generation.status === 'failed' ? '❌ Video failed' : '🎬 Generating video…'}
+                        </span>
+                        {generation.status === 'failed' && (
+                          <span className="text-[10px] text-slate-400 text-center px-4">Credits were refunded</span>
+                        )}
+                      </div>
                       <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-sm rounded px-2 py-0.5 text-[10px] uppercase tracking-wider text-[hsl(270,100%,75%)] font-[Orbitron,sans-serif] pointer-events-none">
                         Video
                       </div>
