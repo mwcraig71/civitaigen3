@@ -72,7 +72,20 @@ export const sceneBuilderData = {
     "tiny blond pubic hairs", "pubic hair shaved", "pubic hair trimmed", "pubic hair natural", "pubic hair landing strip"
   ],
   faceExpressions: [
-    "smiling", "serious", "playful", "seductive", "innocent", "surprised", "smirking", "crying", "laughing", "angry", "sad", "happy", "confused", "excited", "worried", "calm", "flirty", "shy", "confident", "mischievous", "sultry", "pouty", "winking", "blushing", "anxious", "content", "dreamy", "focused", "intense", "relaxed"
+    // Core moods
+    "happy", "pleased", "sad", "angry", "confused", "tired",
+    "shocked, surprised", "irritated", "wtf expression, disbelieving",
+    "triumphant expression", "fearful expression", "bereft, heartbroken",
+    "flirty", "serious", "silly, goofy expression",
+    "hollow stare, blank expression", "incredulous expression", "confident",
+    "fierce expression", "despondent, pouty", "drunk, glassy eyes",
+    "raging, furious expression", "sarcastic expression",
+    "disgusted expression", "ill, nauseous expression",
+    // Original set
+    "smiling", "playful", "seductive", "innocent", "surprised", "smirking",
+    "crying", "laughing", "excited", "worried", "calm", "shy", "mischievous",
+    "sultry", "pouty", "winking", "blushing", "anxious", "content", "dreamy",
+    "focused", "intense", "relaxed"
   ],
   gazeDirections: [
     "looking_at_viewer", "looking_away", "looking_to_the_side", "looking_up", "looking_down", "looking_back"
