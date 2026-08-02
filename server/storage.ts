@@ -1807,6 +1807,8 @@ export class DatabaseStorage implements IStorage {
         reportCount: sharedImages.reportCount,
         storedImagePath: sharedImages.storedImagePath,
         thumbnailUrl: sharedImages.thumbnailUrl,
+        videoUrl: sharedImages.videoUrl,
+        videoThumbnailUrl: sharedImages.videoThumbnailUrl,
         createdAt: sharedImages.createdAt,
         remixCount: sql<number>`(select count(*)::int from ${generations} where ${generations.sourceSharedImageId} = ${sharedImages.id})`.as('remix_count'),
       })

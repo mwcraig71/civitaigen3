@@ -121,8 +121,13 @@ export default function Community() {
       prompt: sharedImage.prompt,
       negativePrompt: sharedImage.negativePrompt || '',
       imageUrl: getImageUrl(sharedImage),
+      // videoUrl and videoThumbnailUrl are read by ImageModal via (currentGeneration as any).videoUrl
+      ...(sharedImage.videoUrl ? {
+        videoUrl: sharedImage.videoUrl,
+        videoThumbnailUrl: sharedImage.videoThumbnailUrl ?? undefined,
+      } : {}),
       status: 'completed' as const,
-      modelId: undefined, // SharedImage doesn't store modelId
+      modelId: undefined,
       seed: undefined,
       steps: 28,
       cfgScale: 7 as number,
@@ -134,7 +139,6 @@ export default function Community() {
       loras: [],
       userId: sharedImage.userId,
       createdAt: sharedImage.createdAt,
-      // Optional fields that might not exist in SharedImage
       characterId: undefined,
       characterName: undefined,
       sceneName: undefined,
