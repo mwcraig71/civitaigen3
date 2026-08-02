@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { Plus, X, Heart, Search, SlidersHorizontal, Sparkles, User } from 'lucide-react';
+import { Plus, X, Heart, Search, SlidersHorizontal, Sparkles, User, ArrowUp, ArrowDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -37,6 +37,16 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
   const [tab, setTab] = useState<'favorites' | 'all'>('favorites');
   const [baseModelFilter, setBaseModelFilter] = useState<string>('all');
   const [selectedTriggerWords, setSelectedTriggerWords] = useState<Set<string>>(new Set());
+  // Local character-group set — initialised from prop, user can modify it
+  const [localCharIds, setLocalCharIds] = useState<Set<string>>(() => new Set(characterLoraIds));
+
+  // Sync when a different character is selected (prop reference changes)
+  useEffect(() => {
+    setLocalCharIds(new Set(characterLoraIds));
+  }, [characterLoraIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const moveToCharacter = (id: string) => setLocalCharIds(prev => new Set([...prev, id]));
+  const removeFromCharacter = (id: string) => setLocalCharIds(prev => { const s = new Set(prev); s.delete(id); return s; });
   const { toast } = useToast();
 
   const favoriteMutation = useMutation({
@@ -172,10 +182,9 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
       <CardContent className="space-y-4">
         {/* Active LoRAs — grouped into Character / Style when applicable */}
         {selectedLoras.length > 0 && (() => {
-          const charSet = new Set(characterLoraIds);
-          const charLoras = selectedLoras.filter(l => charSet.has(l.id));
-          const otherLoras = selectedLoras.filter(l => !charSet.has(l.id));
-          const showGroups = charLoras.length > 0 && otherLoras.length > 0;
+          const charLoras = selectedLoras.filter(l => localCharIds.has(l.id));
+          const otherLoras = selectedLoras.filter(l => !localCharIds.has(l.id));
+          const showGroups = selectedLoras.length > 0 && (localCharIds.size > 0);
 
           const renderRow = (lora: LoRAConfig, isChar: boolean) => {
             const model = getLoRAModel(lora.id);
@@ -199,6 +208,20 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                   <p className="text-sm font-medium truncate" title={model.name}>{model.name}</p>
                   <p className="text-xs text-slate-400 truncate">{model.baseModel}</p>
                 </div>
+
+                {/* Move between groups — only show when groups are active */}
+                {showGroups && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id)}
+                    className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                    title={isChar ? 'Move to Style' : 'Move to Character'}
+                  >
+                    {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                  </Button>
+                )}
 
                 <Popover>
                   <PopoverTrigger asChild>
@@ -289,7 +312,7 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
 
           return (
             <div className="space-y-1.5">
-              {showGroups && (
+              {showGroups && charLoras.length > 0 && (
                 <p className="text-[11px] font-medium text-purple-400 uppercase tracking-wide flex items-center gap-1">
                   <User className="h-3 w-3" /> Character
                 </p>
@@ -301,7 +324,7 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                   <Sparkles className="h-3 w-3" /> Style
                 </p>
               )}
-              {(showGroups ? otherLoras : selectedLoras).map(l => renderRow(l, charSet.has(l.id)))}
+              {(showGroups ? otherLoras : selectedLoras).map(l => renderRow(l, false))}
             </div>
           );
         })()}
