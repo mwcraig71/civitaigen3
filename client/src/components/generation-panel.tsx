@@ -2989,6 +2989,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
               <LoRASelector
                 selectedLoras={form.watch('loras')}
                 onLorasChange={(loras) => form.setValue('loras', loras)}
+                characterLoraIds={selectedCharacter?.loras?.map((l: any) => l.id) ?? []}
                 onTriggerWordClick={(word) => {
                   const currentPrompt = form.getValues('prompt') || '';
                   const newPrompt = currentPrompt ? `${currentPrompt}, ${word}` : word;

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { Plus, X, Heart, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Plus, X, Heart, Search, SlidersHorizontal, Sparkles, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,9 +28,11 @@ interface LoRASelectorProps {
   selectedLoras: LoRAConfig[];
   onLorasChange: (loras: LoRAConfig[]) => void;
   onTriggerWordClick?: (word: string) => void;
+  /** IDs of LoRAs that belong to the currently selected character */
+  characterLoraIds?: string[];
 }
 
-export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWordClick }: LoRASelectorProps) {
+export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWordClick, characterLoraIds = [] }: LoRASelectorProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [tab, setTab] = useState<'favorites' | 'all'>('favorites');
   const [baseModelFilter, setBaseModelFilter] = useState<string>('all');
@@ -168,129 +170,141 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Active LoRAs — compact rows, details in a popover */}
-        {selectedLoras.length > 0 && (
-          <div className="space-y-1.5">
-            {selectedLoras.map((lora) => {
-              const model = getLoRAModel(lora.id);
-              if (!model) return null;
-              // Allow at least the full -10..+10 band; respect a per-LoRA
-              // stored range only when it's wider than that.
-              const minStrength = Math.min((model.strengthMin ?? -1000) / 100, -10);
-              const maxStrength = Math.max((model.strengthMax ?? 1000) / 100, 10);
-              const activationWords = model.activationWords || [];
+        {/* Active LoRAs — grouped into Character / Style when applicable */}
+        {selectedLoras.length > 0 && (() => {
+          const charSet = new Set(characterLoraIds);
+          const charLoras = selectedLoras.filter(l => charSet.has(l.id));
+          const otherLoras = selectedLoras.filter(l => !charSet.has(l.id));
+          const showGroups = charLoras.length > 0 && otherLoras.length > 0;
 
-              return (
-                <div
-                  key={lora.id}
-                  className="flex items-center gap-2 p-2 bg-dark-bg rounded-lg border border-blue-500/30"
-                  data-testid={`selected-lora-${lora.id}`}
-                >
-                  {model.imageUrl ? (
-                    <img
-                      src={model.imageUrl}
-                      alt=""
-                      className="w-9 h-9 rounded object-cover shrink-0"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="w-9 h-9 rounded bg-dark-card shrink-0" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" title={model.name}>
-                      {model.name}
-                    </p>
-                    <p className="text-xs text-slate-400 truncate">{model.baseModel}</p>
-                  </div>
+          const renderRow = (lora: LoRAConfig, isChar: boolean) => {
+            const model = getLoRAModel(lora.id);
+            if (!model) return null;
+            const minStrength = Math.min((model.strengthMin ?? -1000) / 100, -10);
+            const maxStrength = Math.max((model.strengthMax ?? 1000) / 100, 10);
+            const activationWords = model.activationWords || [];
 
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-9 px-2.5 font-mono text-xs shrink-0 border-dark-border"
-                        data-testid={`slider-lora-strength-${lora.id}`}
-                      >
-                        <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
-                        {lora.strength.toFixed(2)}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 bg-dark-card border-dark-border" align="end">
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs">Strength</Label>
-                          <span className="text-xs font-mono text-slate-300 bg-dark-bg px-2 py-0.5 rounded">
-                            {lora.strength.toFixed(2)}
-                          </span>
-                        </div>
-                        <Slider
-                          value={[lora.strength]}
-                          onValueChange={(value) => updateLoRAStrength(lora.id, value[0])}
-                          min={minStrength}
-                          max={maxStrength}
-                          step={0.05}
-                        />
-                        <div className="flex justify-between text-[10px] text-slate-500">
-                          <span>{minStrength}</span>
-                          <button
-                            type="button"
-                            className="text-blue-400 hover:text-blue-300"
-                            onClick={() => updateLoRAStrength(lora.id, 1.0)}
-                          >
-                            Reset to 1.0
-                          </button>
-                          <span>{maxStrength}</span>
-                        </div>
-
-                        {activationWords.length > 0 && (
-                          <div className="pt-2 border-t border-dark-border">
-                            <Label className="text-xs mb-2 block">
-                              Trigger words <span className="text-slate-500">(tap to add to prompt)</span>
-                            </Label>
-                            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
-                              {activationWords.map((word: string, index: number) => {
-                                const isSelected = selectedTriggerWords.has(word);
-                                return (
-                                  <Badge
-                                    key={index}
-                                    variant="outline"
-                                    className={`text-xs py-0.5 px-1.5 cursor-pointer transition-colors max-w-full truncate ${
-                                      isSelected
-                                        ? 'bg-blue-500 border-blue-500 text-white'
-                                        : 'bg-blue-500/10 border-blue-500/20 text-blue-300 hover:bg-blue-500/20'
-                                    }`}
-                                    onClick={() => handleTriggerWordClick(word)}
-                                    title={word}
-                                    data-testid={`activation-word-${word}`}
-                                  >
-                                    {word.length > 24 ? word.substring(0, 22) + '…' : word}
-                                  </Badge>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeLoRA(lora.id)}
-                    className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-400 hover:bg-red-500/10"
-                    title="Remove"
-                    data-testid={`remove-lora-${lora.id}`}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
+            return (
+              <div
+                key={lora.id}
+                className={`flex items-center gap-2 p-2 bg-dark-bg rounded-lg border ${isChar ? 'border-purple-500/40' : 'border-blue-500/30'}`}
+                data-testid={`selected-lora-${lora.id}`}
+              >
+                {model.imageUrl ? (
+                  <img src={model.imageUrl} alt="" className="w-9 h-9 rounded object-cover shrink-0" loading="lazy" />
+                ) : (
+                  <div className="w-9 h-9 rounded bg-dark-card shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" title={model.name}>{model.name}</p>
+                  <p className="text-xs text-slate-400 truncate">{model.baseModel}</p>
                 </div>
-              );
-            })}
-          </div>
-        )}
+
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 px-2.5 font-mono text-xs shrink-0 border-dark-border"
+                      data-testid={`slider-lora-strength-${lora.id}`}
+                    >
+                      <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+                      {lora.strength.toFixed(2)}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 bg-dark-card border-dark-border" align="end">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">Strength</Label>
+                        <span className="text-xs font-mono text-slate-300 bg-dark-bg px-2 py-0.5 rounded">
+                          {lora.strength.toFixed(2)}
+                        </span>
+                      </div>
+                      <Slider
+                        value={[lora.strength]}
+                        onValueChange={(value) => updateLoRAStrength(lora.id, value[0])}
+                        min={minStrength}
+                        max={maxStrength}
+                        step={0.05}
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>{minStrength}</span>
+                        <button
+                          type="button"
+                          className="text-blue-400 hover:text-blue-300"
+                          onClick={() => updateLoRAStrength(lora.id, 1.0)}
+                        >
+                          Reset to 1.0
+                        </button>
+                        <span>{maxStrength}</span>
+                      </div>
+
+                      {activationWords.length > 0 && (
+                        <div className="pt-2 border-t border-dark-border">
+                          <Label className="text-xs mb-2 block">
+                            Trigger words <span className="text-slate-500">(tap to add to prompt)</span>
+                          </Label>
+                          <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+                            {activationWords.map((word: string, index: number) => {
+                              const isSelected = selectedTriggerWords.has(word);
+                              return (
+                                <Badge
+                                  key={index}
+                                  variant="outline"
+                                  className={`text-xs py-0.5 px-1.5 cursor-pointer transition-colors max-w-full truncate ${
+                                    isSelected
+                                      ? 'bg-blue-500 border-blue-500 text-white'
+                                      : 'bg-blue-500/10 border-blue-500/20 text-blue-300 hover:bg-blue-500/20'
+                                  }`}
+                                  onClick={() => handleTriggerWordClick(word)}
+                                  title={word}
+                                  data-testid={`activation-word-${word}`}
+                                >
+                                  {word.length > 24 ? word.substring(0, 22) + '…' : word}
+                                </Badge>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeLoRA(lora.id)}
+                  className="h-9 w-9 p-0 shrink-0 text-slate-400 hover:text-red-400 hover:bg-red-500/10"
+                  title="Remove"
+                  data-testid={`remove-lora-${lora.id}`}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            );
+          };
+
+          return (
+            <div className="space-y-1.5">
+              {showGroups && (
+                <p className="text-[11px] font-medium text-purple-400 uppercase tracking-wide flex items-center gap-1">
+                  <User className="h-3 w-3" /> Character
+                </p>
+              )}
+              {charLoras.map(l => renderRow(l, true))}
+
+              {showGroups && otherLoras.length > 0 && (
+                <p className="text-[11px] font-medium text-blue-400 uppercase tracking-wide flex items-center gap-1 pt-1">
+                  <Sparkles className="h-3 w-3" /> Style
+                </p>
+              )}
+              {(showGroups ? otherLoras : selectedLoras).map(l => renderRow(l, charSet.has(l.id)))}
+            </div>
+          );
+        })()}
 
         {/* Browse & add */}
         <div className="space-y-2.5">
