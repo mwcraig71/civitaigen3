@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Plus, X, Heart, Search, SlidersHorizontal, Sparkles, User, ArrowUp, ArrowDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -39,14 +39,29 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
   const [selectedTriggerWords, setSelectedTriggerWords] = useState<Set<string>>(new Set());
   // Local character-group set — initialised from prop, user can modify it
   const [localCharIds, setLocalCharIds] = useState<Set<string>>(() => new Set(characterLoraIds));
+  // Tracks IDs the user explicitly moved back to Style so auto-detect doesn't re-add them
+  const userRemovedIds = useRef<Set<string>>(new Set());
 
   // Sync when a different character is selected (prop reference changes)
   useEffect(() => {
+    userRemovedIds.current.clear();
     setLocalCharIds(new Set(characterLoraIds));
   }, [characterLoraIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const moveToCharacter = (id: string) => setLocalCharIds(prev => new Set([...prev, id]));
-  const removeFromCharacter = (id: string) => setLocalCharIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+  const moveToCharacter = (id: string) => {
+    userRemovedIds.current.delete(id);
+    setLocalCharIds(prev => new Set([...prev, id]));
+  };
+  const removeFromCharacter = (id: string) => {
+    userRemovedIds.current.add(id);
+    setLocalCharIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+  };
+
+  // Helper — returns true for LoRA names that are always character LoRAs
+  const isCharacterLoraName = (name: string) => {
+    const n = name.toLowerCase();
+    return n.startsWith('rly') || n.includes('be my hero') || n.includes('bemyhero');
+  };
   const { toast } = useToast();
 
   const favoriteMutation = useMutation({
@@ -86,6 +101,23 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
     () => allModels.filter((model) => model.type?.toLowerCase() === 'lora'),
     [allModels]
   );
+
+  // Auto-add LoRAs whose names match the character naming convention
+  useEffect(() => {
+    if (!loraModels.length) return;
+    const autoIds = selectedLoras
+      .map(l => ({ id: l.id, model: loraModels.find(m => m.id === l.id) }))
+      .filter(({ model }) => model?.name && isCharacterLoraName(model.name))
+      .map(({ id }) => id)
+      .filter(id => !userRemovedIds.current.has(id));
+    if (autoIds.length) {
+      setLocalCharIds(prev => {
+        const next = new Set(prev);
+        autoIds.forEach(id => next.add(id));
+        return next;
+      });
+    }
+  }, [selectedLoras, loraModels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const favoriteModelIds = useMemo(
     () => new Set((modelFavorites as any[]).map((f: any) => f.modelId)),
