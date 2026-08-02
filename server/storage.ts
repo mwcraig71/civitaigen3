@@ -152,8 +152,8 @@ export interface IStorage {
     scene?: string;
   }): Promise<(Omit<SharedImage, 'userDisplayName'> & { userDisplayName: string | null; remixCount: number })[]>;
   getSharedImage(id: string): Promise<SharedImage | undefined>;
-  createSharedImage(image: InsertSharedImage & { userId: string }): Promise<SharedImage>;
-  updateSharedImage(id: string, updates: Partial<Pick<SharedImage, 'characterName' | 'sceneName' | 'title' | 'rating'>>): Promise<SharedImage | undefined>;
+  createSharedImage(image: InsertSharedImage & { userId: string; id?: string; videoUrl?: string | null; videoThumbnailUrl?: string | null; thumbnailUrl?: string | null }): Promise<SharedImage>;
+  updateSharedImage(id: string, updates: Partial<Pick<SharedImage, 'characterName' | 'sceneName' | 'title' | 'rating' | 'videoUrl'>>): Promise<SharedImage | undefined>;
   deleteSharedImage(id: string, userId: string): Promise<boolean>;
   likeSharedImage(imageId: string, userId: string): Promise<boolean>; // Returns true if liked, false if unliked
   incrementSharedImageViews(id: string): Promise<void>;
@@ -1825,7 +1825,7 @@ export class DatabaseStorage implements IStorage {
     return image || undefined;
   }
 
-  async createSharedImage(imageData: InsertSharedImage & { userId: string }): Promise<SharedImage> {
+  async createSharedImage(imageData: InsertSharedImage & { userId: string; id?: string; videoUrl?: string | null; videoThumbnailUrl?: string | null; thumbnailUrl?: string | null }): Promise<SharedImage> {
     // Check for existing shared image with same generationId to prevent duplicates
     if (imageData.generationId) {
       const existing = await db
@@ -1844,7 +1844,7 @@ export class DatabaseStorage implements IStorage {
     return image;
   }
 
-  async updateSharedImage(id: string, updates: Partial<Pick<SharedImage, 'characterName' | 'sceneName' | 'title' | 'rating'>>): Promise<SharedImage | undefined> {
+  async updateSharedImage(id: string, updates: Partial<Pick<SharedImage, 'characterName' | 'sceneName' | 'title' | 'rating' | 'videoUrl'>>): Promise<SharedImage | undefined> {
     const [updatedImage] = await db
       .update(sharedImages)
       .set(updates)

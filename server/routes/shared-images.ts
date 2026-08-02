@@ -14,7 +14,8 @@ import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
 import { ErrorLogger } from "../error-logger";
-import { insertGenerationSchema, insertFavoriteSchema, insertModelLikeSchema, insertCharacterSchema, insertQualityGroupSchema, insertSavedSceneSchema, insertSavedPromptSchema, insertSignupPromotionSchema, insertCreditPackageSchema, insertCreditTransactionSchema, insertEventSchema, insertEventStepSchema, insertFavoritePromptWordSchema, transformRequestSchema, generations, models } from "@shared/schema";
+import { insertGenerationSchema, insertFavoriteSchema, insertModelLikeSchema, insertCharacterSchema, insertQualityGroupSchema, insertSavedSceneSchema, insertSavedPromptSchema, insertSignupPromotionSchema, insertCreditPackageSchema, insertCreditTransactionSchema, insertEventSchema, insertEventStepSchema, insertFavoritePromptWordSchema, transformRequestSchema, generations, models, sharedImages } from "@shared/schema";
+import { isNotNull, sql as drizzleSql } from "drizzle-orm";
 import { civitaiOrchestration } from "../civitai-orchestration";
 import { db } from "../db";
 import type { User, Generation } from "@shared/schema";
@@ -347,8 +348,19 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
       // Determine video fields (video generations carry videoUrl + videoThumbnailUrl)
       const genAny = generation as any;
       const isVideo = !!(genAny.videoUrl);
-      const videoUrl: string | null = genAny.videoUrl || null;
+      let videoUrl: string | null = genAny.videoUrl || null;
       const videoThumbnailUrl: string | null = genAny.videoThumbnailUrl || null;
+
+      // Archive video to object storage so it stays playable after the CDN URL expires.
+      // We need a shared image ID before we can store the file, so we generate one here
+      // and pass it into createSharedImage to use as the DB primary key.
+      const sharedImageId = randomUUID();
+      if (isVideo && videoUrl && !videoUrl.startsWith('/api/storage/')) {
+        // Archival is required: if it fails the share is rejected with a retriable error
+        // so the client never records a soon-to-expire CDN URL in the community feed.
+        videoUrl = await objectStorageService.storeVideoFromUrl(videoUrl, sharedImageId);
+        logger.info(`🎬 Archived video to object storage for share ${sharedImageId}`);
+      }
 
       // For the community display image: prefer the video first-frame thumbnail,
       // then the stored source image, then the raw imageUrl.
@@ -366,6 +378,7 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
 
       // Server-side construction of share payload with all required fields
       const shareData = {
+        id: sharedImageId, // Use pre-generated ID so the archived video path matches
         generationId: generation.id,
         title: caption || `Generated with ${generation.characterName || 'AI'}`,
         prompt: generation.prompt || '', // Ensure non-null
@@ -1139,6 +1152,53 @@ export function registerSharedImagesRoutes(app: Express, ctx: RouteContext) {
     } catch (error) {
       logger.error("Error bulk updating character names:", error);
       res.status(500).json({ message: "Failed to bulk update character names" });
+    }
+  });
+
+  // Admin: backfill video archives for shared images that still point to expiring CDN URLs
+  app.post("/api/admin/backfill-shared-videos", requireAdmin, async (req: any, res) => {
+    const results = { archived: 0, skipped: 0, failed: 0, errors: [] as string[] };
+    try {
+      // Use a raw DB query so flagged/rejected records are included — getSharedImages
+      // applies a moderation filter that would silently skip those rows.
+      const rawRows = await db
+        .select({ id: sharedImages.id, videoUrl: sharedImages.videoUrl })
+        .from(sharedImages)
+        .where(
+          and(
+            isNotNull(sharedImages.videoUrl),
+            drizzleSql`${sharedImages.videoUrl} NOT LIKE '/api/storage/%'`
+          )
+        );
+      // isNotNull guard above ensures videoUrl is non-null; cast for TypeScript
+      const videoShares = rawRows as Array<{ id: string; videoUrl: string }>;
+
+      logger.info(`🎬 Backfill: found ${videoShares.length} shared video(s) with non-archived URLs`);
+
+      for (const share of videoShares) {
+        try {
+          const archivedUrl = await objectStorageService.storeVideoFromUrl(
+            (share as any).videoUrl as string,
+            share.id
+          );
+          await storage.updateSharedImage(share.id, { videoUrl: archivedUrl });
+          results.archived++;
+          logger.info(`✅ Backfill archived video for shared image ${share.id}`);
+        } catch (err: any) {
+          results.failed++;
+          const msg = `Failed for ${share.id}: ${err?.message || err}`;
+          results.errors.push(msg);
+          logger.error(`⚠️ Backfill: ${msg}`);
+        }
+      }
+
+      res.json({
+        message: `Backfill complete: ${results.archived} archived, ${results.skipped} skipped, ${results.failed} failed`,
+        ...results
+      });
+    } catch (error) {
+      logger.error("Error running shared-video backfill:", error);
+      res.status(500).json({ message: "Backfill failed", error: String(error) });
     }
   });
 

@@ -556,6 +556,68 @@ export class ObjectStorageService {
     }
   }
 
+  // Store a video file from a URL to object storage and return the /api/storage/... serving URL.
+  // Enforces a 60-second download timeout and a 500 MB content size cap to prevent runaway memory use.
+  async storeVideoFromUrl(videoUrl: string, sharedImageId: string): Promise<string> {
+    const TIMEOUT_MS = 60_000;          // 60 s fetch timeout
+    const MAX_BYTES = 500 * 1024 * 1024; // 500 MB hard cap
+
+    const privateObjectDir = this.getPrivateObjectDir();
+    const videoPath = `${privateObjectDir}/videos/${sharedImageId}.mp4`;
+
+    const { bucketName, objectName } = parseObjectPath(videoPath);
+    const bucket = objectStorageClient.bucket(bucketName);
+    const file = bucket.file(objectName);
+
+    // Fetch with explicit timeout via AbortController
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    let fetchResponse: globalThis.Response;
+    try {
+      fetchResponse = await fetch(videoUrl, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!fetchResponse.ok) {
+      throw new Error(`Failed to download video: ${fetchResponse.status} ${fetchResponse.statusText}`);
+    }
+
+    // Validate content-length before buffering
+    const contentLength = Number(fetchResponse.headers.get('content-length') ?? '0');
+    if (contentLength > MAX_BYTES) {
+      throw new Error(`Video too large to archive: ${contentLength} bytes exceeds ${MAX_BYTES} byte cap`);
+    }
+
+    // Buffer the response, enforcing the size cap while streaming
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const reader = fetchResponse.body!.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_BYTES) {
+        await reader.cancel();
+        throw new Error(`Video stream exceeded ${MAX_BYTES} byte cap after ${totalBytes} bytes`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+
+    const videoBuffer = Buffer.concat(chunks);
+
+    await file.save(videoBuffer, {
+      metadata: {
+        contentType: 'video/mp4',
+      },
+    });
+
+    const servingUrl = `/api/storage${videoPath}`;
+    logger.info(`🎬 Archived video for shared image ${sharedImageId} (${totalBytes} bytes) at ${videoPath}`);
+    return servingUrl;
+  }
+
   // Delete all generation metadata files
   async deleteAllMetadata(): Promise<{ deletedCount: number; errors: string[] }> {
     try {
