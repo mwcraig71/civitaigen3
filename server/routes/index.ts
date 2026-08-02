@@ -27,7 +27,7 @@ import { getCleanupStats, runImageCleanup, RETENTION_POLICY } from "../image-cle
 import OpenAI from "openai";
 import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
 
-import { type RouteContext, clients, eq, and } from "./context";
+import { type RouteContext, clients, eq, and, batchTracker } from "./context";
 import { BatchPoller } from "./generation-pipeline";
 import { registerAuthUserRoutes } from "./auth-user";
 import { registerPaymentsRoutes } from "./payments";
@@ -207,6 +207,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               }
             : civitaiService;
 
+          const isVideo = generation.generationType === 'img2vid';
+
           // Reconstruct the civitai request from stored data
           const civitaiRequest: any = {
             modelId: generation.modelId,
@@ -224,8 +226,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
             characterId: generation.characterId,
             characterName: generation.characterName,
             sceneName: generation.sceneName,
-            generationType: generation.generationType || 'txt2img'
+            generationType: generation.generationType || 'txt2img',
+            // Critical for video recovery: tells BatchPoller to route results to
+            // processIndividualVideo instead of processIndividualImage.
+            mediaType: isVideo ? 'video' : 'image',
+            // Restore video-specific metadata so processIndividualVideo has the
+            // engine/fps/duration context it may need for logging or storage.
+            ...(isVideo && {
+              videoEngine: (generation as any).videoModelEngine,
+              fps: (generation as any).videoFps,
+              durationSeconds: (generation as any).videoDurationSeconds,
+              mode: 'img2vid',
+            }),
           };
+
+          // Re-populate batchTracker for video generations so processIndividualVideo
+          // can emit generation_batch_complete once the result is stored.
+          if (isVideo && !batchTracker.has(generation.id)) {
+            batchTracker.set(generation.id, {
+              totalImages: 1,
+              completedImages: 0,
+              userId: generation.userId,
+              firstImageClaimed: false,
+            } as any);
+            logger.info(`🎥 Re-populated batchTracker for recovered video generation ${generation.id}`);
+          }
 
           await batchPoller.startPolling(
             generation.blobKey,
@@ -236,7 +261,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             userApiKey || undefined
           );
           
-          logger.info(`✅ Resumed polling for generation ${generation.id}`);
+          logger.info(`✅ Resumed polling for generation ${generation.id} (type: ${generation.generationType || 'txt2img'})`);
         } catch (error) {
           logger.error(`❌ Failed to resume polling for generation ${generation.id}:`, error);
           await storage.updateGenerationStatus(generation.id, 'failed');
