@@ -33,7 +33,8 @@ interface LoRASelectorProps {
 }
 
 export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWordClick, characterLoraIds = [] }: LoRASelectorProps) {
-  const [searchTerm, setSearchTerm] = useState('');
+  const [charSearchTerm, setCharSearchTerm] = useState('');
+  const [styleSearchTerm, setStyleSearchTerm] = useState('');
   const [tab, setTab] = useState<'favorites' | 'all'>('favorites');
   const [baseModelFilter, setBaseModelFilter] = useState<string>('all');
   const [selectedTriggerWords, setSelectedTriggerWords] = useState<Set<string>>(new Set());
@@ -135,28 +136,41 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [loraModels]);
 
-  // Search always looks at the active tab's pool; favorites sort first in "All".
-  const filteredLoras = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
+  // Shared search helper
+  const applySearch = (pool: Model[], q: string) => {
+    const lower = q.trim().toLowerCase();
+    if (!lower) return pool;
+    return pool.filter(
+      (lora) =>
+        lora.name.toLowerCase().includes(lower) ||
+        (lora.civitaiId && lora.civitaiId.toLowerCase().includes(lower)) ||
+        (lora.activationWords &&
+          lora.activationWords.some((word: string) => word.toLowerCase().includes(lower)))
+    );
+  };
+
+  // Base pool: tab + base-model filter applied (no search yet)
+  const basePool = useMemo(() => {
     let pool = tab === 'favorites' ? loraModels.filter((m) => favoriteModelIds.has(m.id)) : loraModels;
-    if (baseModelFilter !== 'all') {
-      pool = pool.filter((m) => m.baseModel === baseModelFilter);
-    }
-    const matches = q === ''
-      ? pool
-      : pool.filter(
-          (lora) =>
-            lora.name.toLowerCase().includes(q) ||
-            (lora.civitaiId && lora.civitaiId.toLowerCase().includes(q)) ||
-            (lora.activationWords &&
-              lora.activationWords.some((word: string) => word.toLowerCase().includes(q)))
-        );
-    return [...matches].sort((a, b) => {
+    if (baseModelFilter !== 'all') pool = pool.filter((m) => m.baseModel === baseModelFilter);
+    return [...pool].sort((a, b) => {
       const favDiff = Number(favoriteModelIds.has(b.id)) - Number(favoriteModelIds.has(a.id));
       if (favDiff !== 0) return favDiff;
       return a.name.localeCompare(b.name);
     });
-  }, [loraModels, favoriteModelIds, searchTerm, tab, baseModelFilter]);
+  }, [loraModels, favoriteModelIds, tab, baseModelFilter]);
+
+  // Classify a LoRA for the browse panels
+  const isCharBrowse = (lora: Model) => {
+    if (selectedIds.has(lora.id)) return localCharIds.has(lora.id);
+    return isCharacterLoraName(lora.name ?? '') && !userRemovedIds.current.has(lora.id);
+  };
+
+  const charPool = useMemo(() => basePool.filter(isCharBrowse), [basePool, localCharIds, selectedIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const stylePool = useMemo(() => basePool.filter(l => !isCharBrowse(l)), [basePool, localCharIds, selectedIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredCharLoras = useMemo(() => applySearch(charPool, charSearchTerm), [charPool, charSearchTerm]);
+  const filteredStyleLoras = useMemo(() => applySearch(stylePool, styleSearchTerm), [stylePool, styleSearchTerm]);
 
   const addLoRA = (loraId: string) => {
     if (selectedIds.has(loraId)) return;
@@ -360,7 +374,8 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
         })()}
 
         {/* Browse & add */}
-        <div className="space-y-2.5">
+        <div className="space-y-3">
+          {/* Shared filters */}
           <div className="flex items-center gap-2">
             <Tabs value={tab} onValueChange={(v) => setTab(v as 'favorites' | 'all')}>
               <TabsList className="h-9 bg-dark-bg">
@@ -374,33 +389,16 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
               </TabsList>
             </Tabs>
             <Select value={baseModelFilter} onValueChange={setBaseModelFilter}>
-              <SelectTrigger
-                className="h-9 flex-1 min-w-0 bg-dark-bg border-dark-border text-xs"
-                data-testid="select-lora-base-model-filter"
-              >
+              <SelectTrigger className="h-9 flex-1 min-w-0 bg-dark-bg border-dark-border text-xs" data-testid="select-lora-base-model-filter">
                 <SelectValue placeholder="All base models" />
               </SelectTrigger>
               <SelectContent className="max-h-[300px]">
                 <SelectItem value="all">All base models</SelectItem>
                 {baseModelOptions.map((bm) => (
-                  <SelectItem key={bm} value={bm} data-testid={`filter-base-model-${bm}`}>
-                    {bm}
-                  </SelectItem>
+                  <SelectItem key={bm} value={bm} data-testid={`filter-base-model-${bm}`}>{bm}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
-
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none" />
-            <Input
-              type="text"
-              placeholder={tab === 'favorites' ? 'Search favorites…' : 'Search all LoRAs…'}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-dark-bg border-dark-border pl-9"
-              data-testid="input-lora-search"
-            />
           </div>
 
           {isLoading ? (
@@ -415,145 +413,137 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                 </div>
               ))}
             </div>
-          ) : filteredLoras.length === 0 ? (
-            <div className="text-center py-6 px-4">
-              <p className="text-sm text-slate-400">
-                {searchTerm
-                  ? `No LoRAs match "${searchTerm}"${tab === 'favorites' ? ' in your favorites' : ''}`
-                  : tab === 'favorites'
-                    ? 'No favorites yet.'
-                    : 'No LoRAs available.'}
-              </p>
-              {tab === 'favorites' && (
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  className="text-blue-400 mt-1"
-                  onClick={() => setTab('all')}
-                >
-                  Browse all LoRAs
-                </Button>
-              )}
-            </div>
           ) : (() => {
-              const selCharLoras = filteredLoras.filter(l => selectedIds.has(l.id) && localCharIds.has(l.id));
-              const selStyleLoras = filteredLoras.filter(l => selectedIds.has(l.id) && !localCharIds.has(l.id));
-              const unselectedLoras = filteredLoras.filter(l => !selectedIds.has(l.id));
-              const hasSelectedGroups = selCharLoras.length > 0 || selStyleLoras.length > 0;
-
-              const renderBrowseRow = (lora: Model) => {
-                const isSelected = selectedIds.has(lora.id);
-                const isFavorite = favoriteModelIds.has(lora.id);
-                const isChar = localCharIds.has(lora.id);
-                const isAutoChar = isCharacterLoraName(lora.name ?? '');
-
-                return (
-                  <div
-                    key={lora.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => toggleLoRA(lora.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        toggleLoRA(lora.id);
-                      }
-                    }}
-                    className={`flex items-center gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors w-full text-left ${
-                      isSelected && isChar
-                        ? 'bg-purple-500/10 border-purple-500/40'
-                        : isSelected
-                        ? 'bg-blue-500/10 border-blue-500/40'
-                        : 'bg-dark-bg border-dark-border hover:border-slate-500'
-                    }`}
-                    data-testid={`lora-option-${lora.id}`}
-                  >
-                    {lora.imageUrl ? (
-                      <img src={lora.imageUrl} alt="" className="w-11 h-11 rounded object-cover shrink-0" loading="lazy" />
-                    ) : (
-                      <div className="w-11 h-11 rounded bg-dark-card shrink-0" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium leading-snug line-clamp-2" title={lora.name}>
-                        {lora.name}
-                      </p>
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs text-slate-400 truncate">{lora.baseModel}</p>
-                        {!isSelected && isAutoChar && (
-                          <span className="text-[10px] text-purple-400 font-medium shrink-0">· Character</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Group toggle — only for selected LoRAs */}
-                    {isSelected && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id);
-                        }}
-                        className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
-                        title={isChar ? 'Move to Style group' : 'Move to Character group'}
-                      >
-                        {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
-                      </Button>
-                    )}
-
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        favoriteMutation.mutate({ modelId: lora.id, favorited: isFavorite });
-                      }}
-                      disabled={favoriteMutation.isPending}
-                      className={`h-9 w-9 p-0 shrink-0 ${isFavorite ? 'text-pink-400 hover:text-pink-300 hover:bg-pink-500/10' : 'text-slate-500 hover:text-pink-400 hover:bg-pink-500/10'}`}
-                      title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                      data-testid={`${isFavorite ? 'unfavorite' : 'favorite'}-lora-${lora.id}`}
-                    >
-                      <Heart className={`h-4 w-4 ${isFavorite ? 'fill-current' : ''}`} />
-                    </Button>
-                    <div
-                      className={`flex items-center justify-center h-9 w-9 rounded-md shrink-0 ${isSelected ? 'bg-blue-500 text-white' : 'bg-dark-card text-slate-400'}`}
-                      data-testid={`${isSelected ? 'remove' : 'add'}-lora-${lora.id}`}
-                    >
-                      {isSelected ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                    </div>
-                  </div>
-                );
-              };
+            const renderBrowseRow = (lora: Model, inCharPanel: boolean) => {
+              const isSelected = selectedIds.has(lora.id);
+              const isFavorite = favoriteModelIds.has(lora.id);
+              const isChar = localCharIds.has(lora.id);
 
               return (
-                <div className="max-h-[380px] overflow-y-auto space-y-1.5 pr-0.5">
-                  {hasSelectedGroups && selCharLoras.length > 0 && (
-                    <p className="text-[11px] font-medium text-purple-400 uppercase tracking-wide flex items-center gap-1">
-                      <User className="h-3 w-3" /> Character
-                    </p>
-                  )}
-                  {selCharLoras.map(renderBrowseRow)}
+                <div
+                  key={lora.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleLoRA(lora.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleLoRA(lora.id); } }}
+                  className={`flex items-center gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors w-full text-left ${
+                    isSelected && inCharPanel
+                      ? 'bg-purple-500/10 border-purple-500/40'
+                      : isSelected
+                      ? 'bg-blue-500/10 border-blue-500/40'
+                      : 'bg-dark-bg border-dark-border hover:border-slate-500'
+                  }`}
+                  data-testid={`lora-option-${lora.id}`}
+                >
+                  {lora.imageUrl
+                    ? <img src={lora.imageUrl} alt="" className="w-11 h-11 rounded object-cover shrink-0" loading="lazy" />
+                    : <div className="w-11 h-11 rounded bg-dark-card shrink-0" />}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium leading-snug line-clamp-2" title={lora.name}>{lora.name}</p>
+                    <p className="text-xs text-slate-400 truncate">{lora.baseModel}</p>
+                  </div>
 
-                  {hasSelectedGroups && selStyleLoras.length > 0 && (
-                    <p className={`text-[11px] font-medium text-blue-400 uppercase tracking-wide flex items-center gap-1 ${selCharLoras.length > 0 ? 'pt-1' : ''}`}>
-                      <Sparkles className="h-3 w-3" /> Style
-                    </p>
+                  {/* Move to other group — only for selected LoRAs */}
+                  {isSelected && (
+                    <Button
+                      type="button" variant="ghost" size="sm"
+                      onClick={(e) => { e.stopPropagation(); isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id); }}
+                      className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                      title={isChar ? 'Move to Style group' : 'Move to Character group'}
+                    >
+                      {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                    </Button>
                   )}
-                  {selStyleLoras.map(renderBrowseRow)}
 
-                  {hasSelectedGroups && unselectedLoras.length > 0 && (
-                    <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide flex items-center gap-1 pt-1 border-t border-dark-border mt-1">
-                      Available
-                    </p>
-                  )}
-                  {unselectedLoras.map(renderBrowseRow)}
+                  <Button
+                    type="button" variant="ghost" size="sm"
+                    onClick={(e) => { e.stopPropagation(); favoriteMutation.mutate({ modelId: lora.id, favorited: isFavorite }); }}
+                    disabled={favoriteMutation.isPending}
+                    className={`h-9 w-9 p-0 shrink-0 ${isFavorite ? 'text-pink-400 hover:text-pink-300 hover:bg-pink-500/10' : 'text-slate-500 hover:text-pink-400 hover:bg-pink-500/10'}`}
+                    title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                    data-testid={`${isFavorite ? 'unfavorite' : 'favorite'}-lora-${lora.id}`}
+                  >
+                    <Heart className={`h-4 w-4 ${isFavorite ? 'fill-current' : ''}`} />
+                  </Button>
+                  <div
+                    className={`flex items-center justify-center h-9 w-9 rounded-md shrink-0 ${isSelected ? 'bg-blue-500 text-white' : 'bg-dark-card text-slate-400'}`}
+                    data-testid={`${isSelected ? 'remove' : 'add'}-lora-${lora.id}`}
+                  >
+                    {isSelected ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                  </div>
                 </div>
               );
-            })()
-          }
+            };
+
+            return (
+              <div className="space-y-4">
+                {/* ── Character panel ── */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <User className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                    <span className="text-[11px] font-semibold text-purple-400 uppercase tracking-wide">Character LoRAs</span>
+                    <span className="text-[10px] text-slate-500 ml-auto">{filteredCharLoras.length}</span>
+                  </div>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500 pointer-events-none" />
+                    <Input
+                      type="text"
+                      placeholder="Search character LoRAs…"
+                      value={charSearchTerm}
+                      onChange={(e) => setCharSearchTerm(e.target.value)}
+                      className="bg-dark-bg border-purple-500/20 focus:border-purple-500/50 pl-8 h-8 text-xs"
+                      data-testid="input-char-lora-search"
+                    />
+                  </div>
+                  {filteredCharLoras.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-3">
+                      {charSearchTerm ? `No character LoRAs match "${charSearchTerm}"` : tab === 'favorites' ? 'No favorited character LoRAs.' : 'No character LoRAs available.'}
+                    </p>
+                  ) : (
+                    <div className="max-h-[240px] overflow-y-auto space-y-1.5 pr-0.5">
+                      {filteredCharLoras.map(l => renderBrowseRow(l, true))}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Style panel ── */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                    <span className="text-[11px] font-semibold text-blue-400 uppercase tracking-wide">Style LoRAs</span>
+                    <span className="text-[10px] text-slate-500 ml-auto">{filteredStyleLoras.length}</span>
+                  </div>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500 pointer-events-none" />
+                    <Input
+                      type="text"
+                      placeholder="Search style LoRAs…"
+                      value={styleSearchTerm}
+                      onChange={(e) => setStyleSearchTerm(e.target.value)}
+                      className="bg-dark-bg border-blue-500/20 focus:border-blue-500/50 pl-8 h-8 text-xs"
+                      data-testid="input-style-lora-search"
+                    />
+                  </div>
+                  {filteredStyleLoras.length === 0 ? (
+                    <div className="text-center py-3">
+                      <p className="text-xs text-slate-500">
+                        {styleSearchTerm ? `No style LoRAs match "${styleSearchTerm}"` : tab === 'favorites' ? 'No favorited style LoRAs.' : 'No style LoRAs available.'}
+                      </p>
+                      {tab === 'favorites' && !styleSearchTerm && (
+                        <Button type="button" variant="link" size="sm" className="text-blue-400 mt-1 text-xs" onClick={() => setTab('all')}>
+                          Browse all LoRAs
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="max-h-[240px] overflow-y-auto space-y-1.5 pr-0.5">
+                      {filteredStyleLoras.map(l => renderBrowseRow(l, false))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </CardContent>
     </Card>
