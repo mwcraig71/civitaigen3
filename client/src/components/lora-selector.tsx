@@ -161,9 +161,11 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
   }, [loraModels, favoriteModelIds, tab, baseModelFilter]);
 
   // Classify a LoRA for the browse panels
+  // Priority: explicit user assignment > auto-detect by name
   const isCharBrowse = (lora: Model) => {
-    if (selectedIds.has(lora.id)) return localCharIds.has(lora.id);
-    return isCharacterLoraName(lora.name ?? '') && !userRemovedIds.current.has(lora.id);
+    if (localCharIds.has(lora.id)) return true;           // user (or auto-detect) set as character
+    if (userRemovedIds.current.has(lora.id)) return false; // user explicitly moved to style
+    return isCharacterLoraName(lora.name ?? '');           // name-based default
   };
 
   const charPool = useMemo(() => basePool.filter(isCharBrowse), [basePool, localCharIds, selectedIds]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -443,17 +445,15 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                     <p className="text-xs text-slate-400 truncate">{lora.baseModel}</p>
                   </div>
 
-                  {/* Move to other group — only for selected LoRAs */}
-                  {isSelected && (
-                    <Button
-                      type="button" variant="ghost" size="sm"
-                      onClick={(e) => { e.stopPropagation(); isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id); }}
-                      className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
-                      title={isChar ? 'Move to Style group' : 'Move to Character group'}
-                    >
-                      {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
-                    </Button>
-                  )}
+                  {/* Move between groups — always visible */}
+                  <Button
+                    type="button" variant="ghost" size="sm"
+                    onClick={(e) => { e.stopPropagation(); isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id); }}
+                    className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                    title={isChar ? 'Move to Style group' : 'Move to Character group'}
+                  >
+                    {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                  </Button>
 
                   <Button
                     type="button" variant="ghost" size="sm"
