@@ -253,6 +253,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setTimeout(() => {
     recoverStuckGenerations();
   }, 2000);
+
+  // Seed shared RLY KREA 2 characters (idempotent; no-op where already created)
+  setTimeout(() => {
+    import("../seed-rly-characters").then(({ seedRlyKrea2Characters }) => seedRlyKrea2Characters());
+  }, 3000);
   
   // Maintenance Mode Middleware - blocks non-admin activity when enabled
   app.use('/api', async (req, res, next) => {

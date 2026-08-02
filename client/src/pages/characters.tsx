@@ -18,6 +18,7 @@ import { insertCharacterSchema } from "@shared/schema";
 import { Plus, Edit2, Trash2, Users, Lock, ArrowLeft, Settings, X, Image as ImageIcon, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import LoRASelector from "@/components/lora-selector";
 import { z } from "zod";
 import type { Character } from "@shared/schema";
 import { Link, useLocation } from "wouter";
@@ -787,6 +788,26 @@ function CharacterDialog({ character, onClose }: {
                       ))}
                     </SelectContent>
                   </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="loras"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>LoRAs</FormLabel>
+                  <FormControl>
+                    <LoRASelector
+                      selectedLoras={field.value || []}
+                      onLorasChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    LoRAs attached here are applied automatically whenever this character is used for generation
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}

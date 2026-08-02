@@ -1075,19 +1075,28 @@ router.post("/easy-generate", async (req: Request, res: Response) => {
     );
     const sanitizedPrompt = civitaiService.sanitizePromptAges(combinedPrompt);
 
-    const modelId = await resolveDefaultModelId();
+    // Honor the character's configured base model & sampler settings when set
+    // (e.g. shared KREA 2 Turbo characters); otherwise fall back to defaults.
+    let modelId: string;
+    if (character?.baseModel) {
+      const charModel = await storage.getModelById(character.baseModel);
+      modelId = charModel?.id ?? (await resolveDefaultModelId());
+    } else {
+      modelId = await resolveDefaultModelId();
+    }
 
     const validatedData = insertGenerationSchema.parse({
       prompt: sanitizedPrompt,
       negativePrompt,
       modelId,
-      width: 832,
-      height: 1216,
-      steps: 28,
-      cfgScale: 7,
+      width: character?.width ?? 832,
+      height: character?.height ?? 1216,
+      steps: character?.steps ?? 28,
+      // Character cfgScale is stored as int*10
+      cfgScale: character?.cfgScale != null ? character.cfgScale / 10 : 7,
       seed: undefined,
-      scheduler: "Euler",
-      clipSkip: 2,
+      scheduler: character?.scheduler ?? "Euler",
+      clipSkip: character?.clipSkip ?? 2,
       quantity: data.quantity || 1,
       loras: character?.loras || [],
       characterId: data.characterId,
