@@ -34,6 +34,9 @@ export interface FipFapSlideProps {
 export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad, likedImages, onLike, onDownload, onDelete, onEditCharacter, showUI, onToggleUI, onGenerateRequested, isNewlyInserted = false, currentUserId, isAdmin = false, availableCharacters, galleryMode }: FipFapSlideProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Keep a ref so async callbacks always see the latest isActive without stale closures
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
   const [isEditingCharacter, setIsEditingCharacter] = useState(false);
   const [isViewingPrompt, setIsViewingPrompt] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState(image.characterName || 'none');
@@ -140,13 +143,28 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
     });
   };
 
-  // Play/pause video when active state changes
+  // Play/pause video when active state changes.
+  // canplay may have already fired while the slide was off-screen (isActive=false),
+  // so the onCanPlay prop handler did nothing. When isActive later flips to true the
+  // browser may have suspended the element. We catch a failed play() and attach a
+  // one-shot canplay listener so we retry as soon as the video is ready.
   useEffect(() => {
-    if (!videoRef.current) return;
+    const video = videoRef.current;
+    if (!video) return;
     if (isActive) {
-      videoRef.current.play().catch(() => {});
+      video.currentTime = 0;
+      const attempt = video.play();
+      if (attempt !== undefined) {
+        attempt.catch(() => {
+          const retry = () => {
+            if (isActiveRef.current) video.play().catch(() => {});
+            video.removeEventListener('canplay', retry);
+          };
+          video.addEventListener('canplay', retry);
+        });
+      }
     } else {
-      videoRef.current.pause();
+      video.pause();
     }
   }, [isActive]);
 
@@ -383,11 +401,6 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
               imageLoaded ? 'opacity-100' : 'opacity-0'
             }`}
             onLoadedData={handleImageLoad}
-            onCanPlay={() => {
-              if (isActive && videoRef.current) {
-                videoRef.current.play().catch(() => {});
-              }
-            }}
             data-testid={`fip-fap-video-${image.id}`}
           />
         ) : (
