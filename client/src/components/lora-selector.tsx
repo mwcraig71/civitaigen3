@@ -184,7 +184,7 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
         {selectedLoras.length > 0 && (() => {
           const charLoras = selectedLoras.filter(l => localCharIds.has(l.id));
           const otherLoras = selectedLoras.filter(l => !localCharIds.has(l.id));
-          const showGroups = selectedLoras.length > 0 && (localCharIds.size > 0);
+          const showGroups = selectedLoras.length > 0;
 
           const renderRow = (lora: LoRAConfig, isChar: boolean) => {
             const model = getLoRAModel(lora.id);
