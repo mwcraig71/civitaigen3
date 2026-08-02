@@ -436,11 +436,17 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                 </Button>
               )}
             </div>
-          ) : (
-            <div className="max-h-[380px] overflow-y-auto space-y-1.5 pr-0.5">
-              {filteredLoras.map((lora) => {
+          ) : (() => {
+              const selCharLoras = filteredLoras.filter(l => selectedIds.has(l.id) && localCharIds.has(l.id));
+              const selStyleLoras = filteredLoras.filter(l => selectedIds.has(l.id) && !localCharIds.has(l.id));
+              const unselectedLoras = filteredLoras.filter(l => !selectedIds.has(l.id));
+              const hasSelectedGroups = selCharLoras.length > 0 || selStyleLoras.length > 0;
+
+              const renderBrowseRow = (lora: Model) => {
                 const isSelected = selectedIds.has(lora.id);
                 const isFavorite = favoriteModelIds.has(lora.id);
+                const isChar = localCharIds.has(lora.id);
+                const isAutoChar = isCharacterLoraName(lora.name ?? '');
 
                 return (
                   <div
@@ -455,19 +461,16 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                       }
                     }}
                     className={`flex items-center gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors w-full text-left ${
-                      isSelected
+                      isSelected && isChar
+                        ? 'bg-purple-500/10 border-purple-500/40'
+                        : isSelected
                         ? 'bg-blue-500/10 border-blue-500/40'
                         : 'bg-dark-bg border-dark-border hover:border-slate-500'
                     }`}
                     data-testid={`lora-option-${lora.id}`}
                   >
                     {lora.imageUrl ? (
-                      <img
-                        src={lora.imageUrl}
-                        alt=""
-                        className="w-11 h-11 rounded object-cover shrink-0"
-                        loading="lazy"
-                      />
+                      <img src={lora.imageUrl} alt="" className="w-11 h-11 rounded object-cover shrink-0" loading="lazy" />
                     ) : (
                       <div className="w-11 h-11 rounded bg-dark-card shrink-0" />
                     )}
@@ -475,8 +478,31 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                       <p className="text-sm font-medium leading-snug line-clamp-2" title={lora.name}>
                         {lora.name}
                       </p>
-                      <p className="text-xs text-slate-400 truncate">{lora.baseModel}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs text-slate-400 truncate">{lora.baseModel}</p>
+                        {!isSelected && isAutoChar && (
+                          <span className="text-[10px] text-purple-400 font-medium shrink-0">· Character</span>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Group toggle — only for selected LoRAs */}
+                    {isSelected && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id);
+                        }}
+                        className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                        title={isChar ? 'Move to Style group' : 'Move to Character group'}
+                      >
+                        {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                      </Button>
+                    )}
+
                     <Button
                       type="button"
                       variant="ghost"
@@ -486,29 +512,48 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                         favoriteMutation.mutate({ modelId: lora.id, favorited: isFavorite });
                       }}
                       disabled={favoriteMutation.isPending}
-                      className={`h-9 w-9 p-0 shrink-0 ${
-                        isFavorite
-                          ? 'text-pink-400 hover:text-pink-300 hover:bg-pink-500/10'
-                          : 'text-slate-500 hover:text-pink-400 hover:bg-pink-500/10'
-                      }`}
+                      className={`h-9 w-9 p-0 shrink-0 ${isFavorite ? 'text-pink-400 hover:text-pink-300 hover:bg-pink-500/10' : 'text-slate-500 hover:text-pink-400 hover:bg-pink-500/10'}`}
                       title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
                       data-testid={`${isFavorite ? 'unfavorite' : 'favorite'}-lora-${lora.id}`}
                     >
                       <Heart className={`h-4 w-4 ${isFavorite ? 'fill-current' : ''}`} />
                     </Button>
                     <div
-                      className={`flex items-center justify-center h-9 w-9 rounded-md shrink-0 ${
-                        isSelected ? 'bg-blue-500 text-white' : 'bg-dark-card text-slate-400'
-                      }`}
+                      className={`flex items-center justify-center h-9 w-9 rounded-md shrink-0 ${isSelected ? 'bg-blue-500 text-white' : 'bg-dark-card text-slate-400'}`}
                       data-testid={`${isSelected ? 'remove' : 'add'}-lora-${lora.id}`}
                     >
                       {isSelected ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
                     </div>
                   </div>
                 );
-              })}
-            </div>
-          )}
+              };
+
+              return (
+                <div className="max-h-[380px] overflow-y-auto space-y-1.5 pr-0.5">
+                  {hasSelectedGroups && selCharLoras.length > 0 && (
+                    <p className="text-[11px] font-medium text-purple-400 uppercase tracking-wide flex items-center gap-1">
+                      <User className="h-3 w-3" /> Character
+                    </p>
+                  )}
+                  {selCharLoras.map(renderBrowseRow)}
+
+                  {hasSelectedGroups && selStyleLoras.length > 0 && (
+                    <p className={`text-[11px] font-medium text-blue-400 uppercase tracking-wide flex items-center gap-1 ${selCharLoras.length > 0 ? 'pt-1' : ''}`}>
+                      <Sparkles className="h-3 w-3" /> Style
+                    </p>
+                  )}
+                  {selStyleLoras.map(renderBrowseRow)}
+
+                  {hasSelectedGroups && unselectedLoras.length > 0 && (
+                    <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide flex items-center gap-1 pt-1 border-t border-dark-border mt-1">
+                      Available
+                    </p>
+                  )}
+                  {unselectedLoras.map(renderBrowseRow)}
+                </div>
+              );
+            })()
+          }
         </div>
       </CardContent>
     </Card>
