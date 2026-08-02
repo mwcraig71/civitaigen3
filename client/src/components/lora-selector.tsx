@@ -38,23 +38,39 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
   const [tab, setTab] = useState<'favorites' | 'all'>('favorites');
   const [baseModelFilter, setBaseModelFilter] = useState<string>('all');
   const [selectedTriggerWords, setSelectedTriggerWords] = useState<Set<string>>(new Set());
-  // Local character-group set — initialised from prop, user can modify it
-  const [localCharIds, setLocalCharIds] = useState<Set<string>>(() => new Set(characterLoraIds));
-  // Tracks IDs the user explicitly moved back to Style so auto-detect doesn't re-add them
-  const userRemovedIds = useRef<Set<string>>(new Set());
+  // Local character-group set — initialised from prop + persisted user assignments
+  const [localCharIds, setLocalCharIds] = useState<Set<string>>(() => {
+    let saved: string[] = [];
+    try { saved = JSON.parse(localStorage.getItem('lora-char-ids') ?? '[]'); } catch {}
+    return new Set([...characterLoraIds, ...saved]);
+  });
+  // Tracks IDs the user explicitly moved to Style — persisted so auto-detect doesn't re-override
+  const userRemovedIds = useRef<Set<string>>((() => {
+    try { return new Set<string>(JSON.parse(localStorage.getItem('lora-style-overrides') ?? '[]')); } catch { return new Set<string>(); }
+  })());
 
-  // Sync when a different character is selected (prop reference changes)
+  // Persist character set whenever it changes
   useEffect(() => {
-    userRemovedIds.current.clear();
-    setLocalCharIds(new Set(characterLoraIds));
+    try { localStorage.setItem('lora-char-ids', JSON.stringify([...localCharIds])); } catch {}
+  }, [localCharIds]);
+
+  // When a different character is selected, merge its LoRAs in (keep user's existing assignments)
+  useEffect(() => {
+    setLocalCharIds(prev => {
+      const next = new Set(prev);
+      characterLoraIds.forEach(id => next.add(id));
+      return next;
+    });
   }, [characterLoraIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const moveToCharacter = (id: string) => {
     userRemovedIds.current.delete(id);
+    try { localStorage.setItem('lora-style-overrides', JSON.stringify([...userRemovedIds.current])); } catch {}
     setLocalCharIds(prev => new Set([...prev, id]));
   };
   const removeFromCharacter = (id: string) => {
     userRemovedIds.current.add(id);
+    try { localStorage.setItem('lora-style-overrides', JSON.stringify([...userRemovedIds.current])); } catch {}
     setLocalCharIds(prev => { const s = new Set(prev); s.delete(id); return s; });
   };
 
@@ -257,13 +273,13 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                   <p className="text-xs text-slate-400 truncate">{model.baseModel}</p>
                 </div>
 
-                {/* Move between groups — always visible so user can build the character group */}
+                {/* Move between groups — desktop only */}
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   onClick={() => isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id)}
-                  className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                  className={`hidden sm:inline-flex h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
                   title={isChar ? 'Move to Style group' : 'Move to Character group'}
                 >
                   {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
@@ -445,11 +461,11 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                     <p className="text-xs text-slate-400 truncate">{lora.baseModel}</p>
                   </div>
 
-                  {/* Move between groups — always visible */}
+                  {/* Move between groups — desktop only */}
                   <Button
                     type="button" variant="ghost" size="sm"
                     onClick={(e) => { e.stopPropagation(); isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id); }}
-                    className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                    className={`hidden sm:inline-flex h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
                     title={isChar ? 'Move to Style group' : 'Move to Character group'}
                   >
                     {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
