@@ -132,6 +132,9 @@ export function registerGenerationsRoutes(app: Express, ctx: RouteContext) {
       const formattedGenerations = generations.map(gen => ({
         id: gen.id,
         imageUrl: `/api/images/${gen.id}`, // Use our image serving endpoint instead of blob URL
+        // Pass video fields through so fip-fap can render the video player
+        videoUrl: (gen as any).videoUrl || undefined,
+        videoThumbnailUrl: (gen as any).videoThumbnailUrl || undefined,
         prompt: gen.prompt || '',
         negativePrompt: gen.negativePrompt || '',
         modelUsed: (gen as { modelName?: string | null }).modelName || gen.modelId || 'Unknown Model',

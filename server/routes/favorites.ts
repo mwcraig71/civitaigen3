@@ -60,10 +60,13 @@ export function registerFavoritesRoutes(app: Express, ctx: RouteContext) {
       for (const favorite of favorites) {
         if (!favorite.generationId) continue;
         const generation = await storage.getGeneration(favorite.generationId);
-        if (generation && generation.status === 'completed' && generation.imageUrl) {
+        if (generation && generation.status === 'completed' && (generation.imageUrl || (generation as any).videoUrl)) {
           favoritesWithGenerations.push({
             id: generation.id,
             imageUrl: `/api/images/${generation.id}`, // Use our image serving endpoint instead of blob URL
+            // Pass video fields so fip-fap can render video player
+            videoUrl: (generation as any).videoUrl || undefined,
+            videoThumbnailUrl: (generation as any).videoThumbnailUrl || undefined,
             prompt: generation.prompt || '',
             negativePrompt: generation.negativePrompt || '',
             modelUsed: (generation as { modelName?: string | null }).modelName || generation.modelId || 'Unknown Model',

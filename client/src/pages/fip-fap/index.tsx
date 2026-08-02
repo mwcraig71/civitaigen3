@@ -1258,6 +1258,9 @@ export default function FipFap() {
           userId: generationData.userId || user?.id || '',
           generationId: generationData.id,
           imageUrl: `/api/images/${generationData.id}`, // Watermarked image endpoint
+          // Pass video fields through so fip-fap slide renders video player immediately
+          videoUrl: generationData.videoUrl || undefined,
+          videoThumbnailUrl: generationData.videoThumbnailUrl || undefined,
           prompt: generationData.prompt || '',
           negativePrompt: generationData.negativePrompt || '',
           modelUsed: generationData.modelName || generationData.modelId || '',
