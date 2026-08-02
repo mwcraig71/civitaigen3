@@ -17,6 +17,13 @@ interface GenerationParamsFieldsProps {
   setUseFirstImageSeedOffset: React.Dispatch<React.SetStateAction<boolean>>;
   user: unknown;
   updatePreferencesMutation: UseMutationResult<any, any, { showWatermark?: boolean }, unknown>;
+  /** Model family — drives conditional field visibility. */
+  modelFamily?: 'pony' | 'flux' | 'krea2';
+  /**
+   * Model baseModel string (e.g. "KREA 2" or "Krea 2 Turbo").
+   * Mirrors the server routing: "turbo" in baseModel → comfy path; otherwise → FAL path.
+   */
+  modelBaseModel?: string;
 }
 
 export function GenerationParamsFields({
@@ -26,339 +33,425 @@ export function GenerationParamsFields({
   setUseFirstImageSeedOffset,
   user,
   updatePreferencesMutation,
+  modelFamily,
+  modelBaseModel,
 }: GenerationParamsFieldsProps) {
+  const bmLower = (modelBaseModel || '').toLowerCase();
+
+  // Mirrors server routing exactly: baseModel includes "turbo" → comfy; else → FAL.
+  // Krea 2 FAL path: base model (no LoRAs, aspectRatio + creativity controls).
+  const isKrea2Fal = modelFamily === 'krea2' && !bmLower.includes('turbo');
+  // Krea 2 comfy path: "Krea 2 Turbo" community checkpoints (steps/cfg, LoRAs visible).
+  const isKrea2Comfy = modelFamily === 'krea2' && bmLower.includes('turbo');
+  // Flux hides clipSkip.
+  const isFlux = modelFamily === 'flux';
+
   return (
     <>
-                  {/* Negative Prompt */}
-                  <FormField
-                    control={form.control}
-                    name="negativePrompt"
-                    render={({ field }) => (
-                      <FormItem>
-                        <div className="flex items-center justify-between">
-                          <FormLabel>Negative Prompt</FormLabel>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              form.setValue('negativePrompt', '');
-                              toast({
-                                title: "Negative Prompt Cleared",
-                                description: "The negative prompt has been cleared.",
-                              });
-                            }}
-                            className="h-6 px-2 text-xs bg-transparent border-dark-border text-slate-400 hover:text-white hover:bg-slate-700"
-                            data-testid="button-clear-negative-prompt"
-                          >
-                            <X className="h-3 w-3 mr-1" />
-                            Clear
-                          </Button>
-                        </div>
-                        <FormControl>
-                          <Textarea
-                            placeholder="What to avoid in the image..."
-                            className="bg-dark-bg border-dark-border resize-none"
-                            rows={4}
-                            data-testid="textarea-negative-prompt"
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
+      {/* ── Negative Prompt ────────────────────────────────────────── */}
+      {isKrea2Fal ? (
+        <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-3 text-sm text-sky-300">
+          Krea 2 uses natural-language prompts — no negative prompt needed.
+        </div>
+      ) : (
+        <FormField
+          control={form.control}
+          name="negativePrompt"
+          render={({ field }) => (
+            <FormItem>
+              <div className="flex items-center justify-between">
+                <FormLabel>Negative Prompt</FormLabel>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    form.setValue('negativePrompt', '');
+                    toast({
+                      title: "Negative Prompt Cleared",
+                      description: "The negative prompt has been cleared.",
+                    });
+                  }}
+                  className="h-6 px-2 text-xs bg-transparent border-dark-border text-slate-400 hover:text-white hover:bg-slate-700"
+                  data-testid="button-clear-negative-prompt"
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  Clear
+                </Button>
+              </div>
+              <FormControl>
+                <Textarea
+                  placeholder="What to avoid in the image..."
+                  className="bg-dark-bg border-dark-border resize-none"
+                  rows={4}
+                  data-testid="textarea-negative-prompt"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
+
+      {/* ── Seed ────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-4">
+        <FormField
+          control={form.control}
+          name="seed"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Seed</FormLabel>
+              <div className="flex gap-2">
+                <FormControl>
+                  <Input
+                    type="number"
+                    className="bg-dark-card border-dark-border"
+                    data-testid="input-seed"
+                    placeholder="-1 (Random)"
+                    value={field.value === -1 ? '' : field.value}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      const newValue = value === '' ? -1 : parseInt(value);
+                      field.onChange(newValue);
+                    }}
                   />
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField
-                      control={form.control}
-                      name="seed"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Seed</FormLabel>
-                          <div className="flex gap-2">
-                            <FormControl>
-                              <Input
-                                type="number"
-                                className="bg-dark-card border-dark-border"
-                                data-testid="input-seed"
-                                placeholder="-1 (Random)"
-                                value={field.value === -1 ? '' : field.value}
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  const newValue = value === '' ? -1 : parseInt(value);
-                                  field.onChange(newValue);
-                                }}
-                              />
-                            </FormControl>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={() => {
-                                field.onChange(-1);
-                              }}
-                              className="bg-dark-card border-dark-border hover:bg-dark-bg"
-                              data-testid="button-randomize-seed"
-                            >
-                              <RefreshCw className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="seedIncrement"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Seed Increment</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="text"
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              className="bg-dark-card border-dark-border min-w-[80px]"
-                              data-testid="input-seed-increment"
-                              placeholder="3"
-                              value={field.value ?? ""}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                if (value === "") {
-                                  field.onChange(undefined);
-                                } else if (/^\d+$/.test(value)) {
-                                  field.onChange(parseInt(value));
-                                }
-                              }}
-                              onBlur={(e) => {
-                                const value = e.target.value;
-                                if (value === "" || field.value === undefined) {
-                                  field.onChange(3);
-                                } else {
-                                  const numValue = parseInt(value);
-                                  if (isNaN(numValue) || numValue < 1) {
-                                    field.onChange(1);
-                                  } else if (numValue > 1000000) {
-                                    field.onChange(1000000);
-                                  }
-                                }
-                              }}
-                            />
-                          </FormControl>
-                          <p className="text-xs text-slate-500">How much to increase seed for each additional image</p>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-
-                  <div className="pt-3 mt-1 border-t border-dark-border">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Seed</h3>
-                  </div>
-                  {/* First Image Seed Offset */}
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="first-image-seed-offset"
-                      checked={useFirstImageSeedOffset}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setUseFirstImageSeedOffset(checked);
-                      }}
-                      className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-                      data-testid="checkbox-first-image-seed-offset"
-                    />
-                    <label htmlFor="first-image-seed-offset" className="text-sm text-slate-700 dark:text-slate-300">
-                      First Image Seed Offset (+3)
-                    </label>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Add 3 to the seed for the first image, then increment normally for additional images
-                  </p>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField
-                      control={form.control}
-                      name="steps"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Steps</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              className="bg-dark-card border-dark-border"
-                              data-testid="input-steps"
-                              {...field}
-                              onChange={(e) => field.onChange(parseInt(e.target.value))}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="cfgScale"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>CFG Scale</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              step="0.5"
-                              className="bg-dark-card border-dark-border"
-                              data-testid="input-cfg-scale"
-                              {...field}
-                              onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="width"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Width</FormLabel>
-                          <Select onValueChange={(value) => field.onChange(parseInt(value))} value={field.value.toString()}>
-                            <FormControl>
-                              <SelectTrigger className="bg-dark-card border-dark-border">
-                                <SelectValue />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="768">768</SelectItem>
-                              <SelectItem value="832">832</SelectItem>
-                              <SelectItem value="1024">1024</SelectItem>
-                              <SelectItem value="1216">1216</SelectItem>
-                              <SelectItem value="1320">1320</SelectItem>
-                              <SelectItem value="1536">1536</SelectItem>
-                              <SelectItem value="1984">1984</SelectItem>
-                              <SelectItem value="2048">2048</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="height"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Height</FormLabel>
-                          <Select onValueChange={(value) => field.onChange(parseInt(value))} value={field.value.toString()}>
-                            <FormControl>
-                              <SelectTrigger className="bg-dark-card border-dark-border">
-                                <SelectValue />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="768">768</SelectItem>
-                              <SelectItem value="832">832</SelectItem>
-                              <SelectItem value="1024">1024</SelectItem>
-                              <SelectItem value="1216">1216</SelectItem>
-                              <SelectItem value="1320">1320</SelectItem>
-                              <SelectItem value="1536">1536</SelectItem>
-                              <SelectItem value="1984">1984</SelectItem>
-                              <SelectItem value="2048">2048</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="clipSkip"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Clip Skip</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              className="bg-dark-card border-dark-border"
-                              data-testid="input-clip-skip"
-                              {...field}
-                              onChange={(e) => field.onChange(parseInt(e.target.value))}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="scheduler"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Scheduler / Sampler</FormLabel>
-                          <Select onValueChange={field.onChange} value={field.value}>
-                            <FormControl>
-                              <SelectTrigger className="bg-dark-card border-dark-border" data-testid="select-scheduler">
-                                <SelectValue />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent className="max-h-[400px]">
-                              <SelectItem value="Euler">Euler</SelectItem>
-                              <SelectItem value="Euler a">Euler a (Ancestral) ⭐</SelectItem>
-                              <SelectItem value="DPM++ 2M">DPM++ 2M</SelectItem>
-                              <SelectItem value="DPM++ 2M Karras">DPM++ 2M Karras 🔥</SelectItem>
-                              <SelectItem value="DPM++ 2M SDE">DPM++ 2M SDE</SelectItem>
-                              <SelectItem value="DPM++ 2M SDE Karras">DPM++ 2M SDE Karras (Photo)</SelectItem>
-                              <SelectItem value="DPM++ 2S a">DPM++ 2S a</SelectItem>
-                              <SelectItem value="DPM++ 2S a Karras">DPM++ 2S a Karras</SelectItem>
-                              <SelectItem value="DPM++ 3M SDE">DPM++ 3M SDE</SelectItem>
-                              <SelectItem value="DPM++ SDE">DPM++ SDE</SelectItem>
-                              <SelectItem value="DPM++ SDE Karras">DPM++ SDE Karras</SelectItem>
-                              <SelectItem value="DPM2">DPM2</SelectItem>
-                              <SelectItem value="DPM2 a">DPM2 a</SelectItem>
-                              <SelectItem value="DPM2 Karras">DPM2 Karras</SelectItem>
-                              <SelectItem value="DPM2 a Karras">DPM2 a Karras</SelectItem>
-                              <SelectItem value="DPM Fast">DPM Fast</SelectItem>
-                              <SelectItem value="DPM Adaptive">DPM Adaptive</SelectItem>
-                              <SelectItem value="Heun">Heun</SelectItem>
-                              <SelectItem value="DDIM">DDIM</SelectItem>
-                              <SelectItem value="UniPC">UniPC (Fast)</SelectItem>
-                              <SelectItem value="UniPC BH2">UniPC BH2</SelectItem>
-                              <SelectItem value="LCM">LCM (4-8 steps)</SelectItem>
-                              <SelectItem value="DEIS">DEIS</SelectItem>
-                              <SelectItem value="IPNDM_V">IPNDM_V (LoRA Heavy)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                  </div>
-
-                  <div className="pt-3 mt-1 border-t border-dark-border">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Output</h3>
-                  </div>
-                  {/* Watermark Control */}
-                  <div className="flex items-center justify-between p-4 rounded-lg border border-dark-border bg-dark-bg">
-                    <div className="space-y-1">
-                      <Label htmlFor="watermark-toggle" className="text-base font-medium text-white">
-                        CiviVerse Logo Watermark
-                      </Label>
-                      <p className="text-sm text-slate-300">
-                        Add a small CiviVerse.com logo watermark to your generated images
-                      </p>
-                    </div>
-                    <Switch
-                      id="watermark-toggle"
-                      checked={(user as any)?.showWatermark || false}
-                      onCheckedChange={(checked) =>
-                        updatePreferencesMutation.mutate({ showWatermark: checked })
+                </FormControl>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => {
+                    field.onChange(-1);
+                  }}
+                  className="bg-dark-card border-dark-border hover:bg-dark-bg"
+                  data-testid="button-randomize-seed"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              </div>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="seedIncrement"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Seed Increment</FormLabel>
+              <FormControl>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  className="bg-dark-card border-dark-border min-w-[80px]"
+                  data-testid="input-seed-increment"
+                  placeholder="3"
+                  value={field.value ?? ""}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === "") {
+                      field.onChange(undefined);
+                    } else if (/^\d+$/.test(value)) {
+                      field.onChange(parseInt(value));
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const value = e.target.value;
+                    if (value === "" || field.value === undefined) {
+                      field.onChange(3);
+                    } else {
+                      const numValue = parseInt(value);
+                      if (isNaN(numValue) || numValue < 1) {
+                        field.onChange(1);
+                      } else if (numValue > 1000000) {
+                        field.onChange(1000000);
                       }
-                      disabled={updatePreferencesMutation.isPending}
-                      data-testid="switch-watermark"
-                      className="data-[state=checked]:bg-primary-500 data-[state=unchecked]:bg-slate-600"
+                    }
+                  }}
+                />
+              </FormControl>
+              <p className="text-xs text-slate-500">How much to increase seed for each additional image</p>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      </div>
+
+      <div className="pt-3 mt-1 border-t border-dark-border">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Seed</h3>
+      </div>
+      {/* First Image Seed Offset */}
+      <div className="flex items-center space-x-2">
+        <input
+          type="checkbox"
+          id="first-image-seed-offset"
+          checked={useFirstImageSeedOffset}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            setUseFirstImageSeedOffset(checked);
+          }}
+          className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+          data-testid="checkbox-first-image-seed-offset"
+        />
+        <label htmlFor="first-image-seed-offset" className="text-sm text-slate-700 dark:text-slate-300">
+          First Image Seed Offset (+3)
+        </label>
+      </div>
+      <p className="text-xs text-slate-500 mt-1">
+        Add 3 to the seed for the first image, then increment normally for additional images
+      </p>
+
+      {/* ── Krea 2 FAL controls (aspectRatio + creativity) ─────────── */}
+      {isKrea2Fal && (
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="aspectRatio"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Aspect Ratio</FormLabel>
+                <Select onValueChange={field.onChange} value={field.value ?? '1:1'}>
+                  <FormControl>
+                    <SelectTrigger className="bg-dark-card border-dark-border" data-testid="select-aspect-ratio">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="1:1">1:1 — Square</SelectItem>
+                    <SelectItem value="4:3">4:3 — Landscape</SelectItem>
+                    <SelectItem value="3:2">3:2 — Photo</SelectItem>
+                    <SelectItem value="16:9">16:9 — Widescreen</SelectItem>
+                    <SelectItem value="2.35:1">2.35:1 — Cinematic</SelectItem>
+                    <SelectItem value="4:5">4:5 — Portrait</SelectItem>
+                    <SelectItem value="2:3">2:3 — Portrait</SelectItem>
+                    <SelectItem value="9:16">9:16 — Vertical</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="creativity"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Creativity</FormLabel>
+                <Select onValueChange={field.onChange} value={field.value ?? 'medium'}>
+                  <FormControl>
+                    <SelectTrigger className="bg-dark-card border-dark-border" data-testid="select-creativity">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="raw">Raw — literal prompt</SelectItem>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium (default)</SelectItem>
+                    <SelectItem value="high">High — interpretive</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500 mt-1">How much Krea interprets your prompt</p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+      )}
+
+      {/* ── Steps / CFG / Width / Height / ClipSkip / Scheduler ─────── */}
+      {/* Hidden for Krea 2 FAL; shown for all other models + Krea 2 comfy */}
+      {!isKrea2Fal && (
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="steps"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Steps</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    className="bg-dark-card border-dark-border"
+                    data-testid="input-steps"
+                    {...field}
+                    onChange={(e) => field.onChange(parseInt(e.target.value))}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="cfgScale"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>CFG Scale</FormLabel>
+                <FormControl>
+                  <Input
+                    type="number"
+                    step="0.5"
+                    className="bg-dark-card border-dark-border"
+                    data-testid="input-cfg-scale"
+                    {...field}
+                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="width"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Width</FormLabel>
+                <Select onValueChange={(value) => field.onChange(parseInt(value))} value={field.value.toString()}>
+                  <FormControl>
+                    <SelectTrigger className="bg-dark-card border-dark-border">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="768">768</SelectItem>
+                    <SelectItem value="832">832</SelectItem>
+                    <SelectItem value="1024">1024</SelectItem>
+                    <SelectItem value="1216">1216</SelectItem>
+                    <SelectItem value="1320">1320</SelectItem>
+                    <SelectItem value="1536">1536</SelectItem>
+                    <SelectItem value="1984">1984</SelectItem>
+                    <SelectItem value="2048">2048</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="height"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Height</FormLabel>
+                <Select onValueChange={(value) => field.onChange(parseInt(value))} value={field.value.toString()}>
+                  <FormControl>
+                    <SelectTrigger className="bg-dark-card border-dark-border">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="768">768</SelectItem>
+                    <SelectItem value="832">832</SelectItem>
+                    <SelectItem value="1024">1024</SelectItem>
+                    <SelectItem value="1216">1216</SelectItem>
+                    <SelectItem value="1320">1320</SelectItem>
+                    <SelectItem value="1536">1536</SelectItem>
+                    <SelectItem value="1984">1984</SelectItem>
+                    <SelectItem value="2048">2048</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          {/* ClipSkip: hidden for Flux and Krea 2 comfy (comfy path hardcodes euler/simple) */}
+          {!isFlux && !isKrea2Comfy && (
+            <FormField
+              control={form.control}
+              name="clipSkip"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Clip Skip</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      className="bg-dark-card border-dark-border"
+                      data-testid="input-clip-skip"
+                      {...field}
+                      onChange={(e) => field.onChange(parseInt(e.target.value))}
                     />
-                  </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
+          {/* Scheduler: hidden for Krea 2 comfy (hardcoded euler/simple) */}
+          {!isKrea2Comfy && (
+            <FormField
+              control={form.control}
+              name="scheduler"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Scheduler / Sampler</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger className="bg-dark-card border-dark-border" data-testid="select-scheduler">
+                        <SelectValue />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent className="max-h-[400px]">
+                      <SelectItem value="Euler">Euler</SelectItem>
+                      <SelectItem value="Euler a">Euler a (Ancestral) ⭐</SelectItem>
+                      <SelectItem value="DPM++ 2M">DPM++ 2M</SelectItem>
+                      <SelectItem value="DPM++ 2M Karras">DPM++ 2M Karras 🔥</SelectItem>
+                      <SelectItem value="DPM++ 2M SDE">DPM++ 2M SDE</SelectItem>
+                      <SelectItem value="DPM++ 2M SDE Karras">DPM++ 2M SDE Karras (Photo)</SelectItem>
+                      <SelectItem value="DPM++ 2S a">DPM++ 2S a</SelectItem>
+                      <SelectItem value="DPM++ 2S a Karras">DPM++ 2S a Karras</SelectItem>
+                      <SelectItem value="DPM++ 3M SDE">DPM++ 3M SDE</SelectItem>
+                      <SelectItem value="DPM++ SDE">DPM++ SDE</SelectItem>
+                      <SelectItem value="DPM++ SDE Karras">DPM++ SDE Karras</SelectItem>
+                      <SelectItem value="DPM2">DPM2</SelectItem>
+                      <SelectItem value="DPM2 a">DPM2 a</SelectItem>
+                      <SelectItem value="DPM2 Karras">DPM2 Karras</SelectItem>
+                      <SelectItem value="DPM2 a Karras">DPM2 a Karras</SelectItem>
+                      <SelectItem value="DPM Fast">DPM Fast</SelectItem>
+                      <SelectItem value="DPM Adaptive">DPM Adaptive</SelectItem>
+                      <SelectItem value="Heun">Heun</SelectItem>
+                      <SelectItem value="DDIM">DDIM</SelectItem>
+                      <SelectItem value="UniPC">UniPC (Fast)</SelectItem>
+                      <SelectItem value="UniPC BH2">UniPC BH2</SelectItem>
+                      <SelectItem value="LCM">LCM (4-8 steps)</SelectItem>
+                      <SelectItem value="DEIS">DEIS</SelectItem>
+                      <SelectItem value="IPNDM_V">IPNDM_V (LoRA Heavy)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
+        </div>
+      )}
+
+      <div className="pt-3 mt-1 border-t border-dark-border">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Output</h3>
+      </div>
+      {/* Watermark Control */}
+      <div className="flex items-center justify-between p-4 rounded-lg border border-dark-border bg-dark-bg">
+        <div className="space-y-1">
+          <Label htmlFor="watermark-toggle" className="text-base font-medium text-white">
+            CiviVerse Logo Watermark
+          </Label>
+          <p className="text-sm text-slate-300">
+            Add a small CiviVerse.com logo watermark to your generated images
+          </p>
+        </div>
+        <Switch
+          id="watermark-toggle"
+          checked={(user as any)?.showWatermark || false}
+          onCheckedChange={(checked) =>
+            updatePreferencesMutation.mutate({ showWatermark: checked })
+          }
+          disabled={updatePreferencesMutation.isPending}
+          data-testid="switch-watermark"
+          className="data-[state=checked]:bg-primary-500 data-[state=unchecked]:bg-slate-600"
+        />
+      </div>
     </>
   );
 }

@@ -25,6 +25,9 @@ export const generationSchema = z.object({
     id: z.string(),
     strength: z.number().min(-2).max(2)
   })).optional().default([]),
+  // Krea 2 FAL-path specific fields
+  aspectRatio: z.string().optional().default('1:1'),
+  creativity: z.enum(['raw', 'low', 'medium', 'high']).optional().default('medium'),
 });
 
 export type GenerationFormData = z.infer<typeof generationSchema>;
@@ -44,6 +47,8 @@ export const DEFAULT_GENERATION_SETTINGS: GenerationFormData = {
   clipSkip: 2,
   quantity: 4,
   loras: [],
+  aspectRatio: '1:1',
+  creativity: 'medium',
 };
 
 interface UseGenerationSettingsOptions {

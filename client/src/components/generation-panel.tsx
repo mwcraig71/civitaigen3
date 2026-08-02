@@ -1094,23 +1094,30 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
   const [shotStyle, setShotStyle] = useState<'best' | 'candid'>('best');
   const [enhanceDirection, setEnhanceDirection] = useState('');
 
-  // Reactively compute prompt style label from the currently selected model.
+  // Reactively compute model family + prompt style label from the currently selected model.
   const watchedModelId = form.watch('modelId');
-  const promptStyleInfo = useMemo(() => {
+  const { selectedModelFamily, selectedModelName, selectedModelBaseModel, promptStyleInfo } = useMemo(() => {
     const model = allModels.find((m: Model) => m.id === watchedModelId);
     const family = detectModelFamily(model?.baseModel, model?.name);
+    const name = model?.name ?? '';
+    // baseModel is the canonical field used by server-side routing (e.g. "KREA 2" vs "Krea 2 Turbo").
+    // The UI uses the same field so FAL/comfy path detection is consistent with the server.
+    const baseModelStr = model?.baseModel ?? '';
+    let style;
     if (family === 'flux' || family === 'krea2') {
-      return {
+      style = {
         label: 'Natural language',
         tooltip: 'This model uses flowing natural-language prose prompts, not tag lists.',
         colorClass: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
       };
+    } else {
+      style = {
+        label: 'Pony style',
+        tooltip: 'This model uses booru/danbooru-style comma-separated tag prompts.',
+        colorClass: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+      };
     }
-    return {
-      label: 'Pony style',
-      tooltip: 'This model uses booru/danbooru-style comma-separated tag prompts.',
-      colorClass: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
-    };
+    return { selectedModelFamily: family, selectedModelName: name, selectedModelBaseModel: baseModelStr, promptStyleInfo: style };
   }, [watchedModelId, allModels]);
   const aiEnhanceMutation = useMutation({
     mutationFn: async (request: any) => {
@@ -2359,6 +2366,9 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
       sourceImageUrl: generationType === "img2img" ? sourceImageUrl : undefined,
       denoiseStrength: generationType === "img2img" ? denoiseStrength : undefined,
       useFirstImageSeedOffset,
+      // Krea 2 FAL-path fields — passed through to orchestration layer
+      aspectRatio: data.aspectRatio ?? '1:1',
+      creativity: data.creativity ?? 'medium',
     };
     
     console.log('🎲 Frontend submitting seed:', data.seed, '(should be -1 for random)');
@@ -2984,22 +2994,26 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                     modelsLoading={modelsLoading}
                   />
 
-              {/* LoRA Selector — promoted out of Advanced Settings so it's
-                  always visible; this is a primary control, not an advanced one. */}
-              <LoRASelector
-                selectedLoras={form.watch('loras')}
-                onLorasChange={(loras) => form.setValue('loras', loras)}
-                characterLoraIds={selectedCharacter?.loras?.map((l: any) => l.id) ?? []}
-                onTriggerWordClick={(word) => {
-                  const currentPrompt = form.getValues('prompt') || '';
-                  const newPrompt = currentPrompt ? `${currentPrompt}, ${word}` : word;
-                  form.setValue('prompt', newPrompt);
-                  toast({
-                    title: "Trigger Word Added",
-                    description: `"${word}" has been added to your prompt.`,
-                  });
-                }}
-              />
+              {/* LoRA Selector — hidden for base Krea 2 (FAL path) because
+                  the FAL endpoint does not support LoRAs. Visible for all other
+                  models and for Krea 2 Turbo community checkpoints (comfy path).
+                  Detection mirrors server routing: baseModel includes "turbo" → comfy. */}
+              {!(selectedModelFamily === 'krea2' && !selectedModelBaseModel.toLowerCase().includes('turbo')) && (
+                <LoRASelector
+                  selectedLoras={form.watch('loras')}
+                  onLorasChange={(loras) => form.setValue('loras', loras)}
+                  characterLoraIds={selectedCharacter?.loras?.map((l: any) => l.id) ?? []}
+                  onTriggerWordClick={(word) => {
+                    const currentPrompt = form.getValues('prompt') || '';
+                    const newPrompt = currentPrompt ? `${currentPrompt}, ${word}` : word;
+                    form.setValue('prompt', newPrompt);
+                    toast({
+                      title: "Trigger Word Added",
+                      description: `"${word}" has been added to your prompt.`,
+                    });
+                  }}
+                />
+              )}
 
               {/* Advanced Settings Toggle */}
               <Button
@@ -3157,6 +3171,8 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                     setUseFirstImageSeedOffset={setUseFirstImageSeedOffset}
                     user={user}
                     updatePreferencesMutation={updatePreferencesMutation}
+                    modelFamily={selectedModelFamily}
+                    modelBaseModel={selectedModelBaseModel}
                   />
                 </div>
               )}

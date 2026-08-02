@@ -447,6 +447,9 @@ function friendlyGenerationError(raw: string): string {
             seed: imageSeed,
             quantity: 1,
             loras: lorasWithArns,
+            // Krea 2 FAL-path specific fields (ignored by other paths)
+            aspectRatio: generationData.aspectRatio,
+            creativity: generationData.creativity,
           },
           userApiKey,
         );

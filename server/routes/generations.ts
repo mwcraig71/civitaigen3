@@ -281,9 +281,16 @@ export function registerGenerationsRoutes(app: Express, ctx: RouteContext) {
         logger.info(`📊 Platform API usage tracked: ${newPlatformCount} generations for user ${userId}`);
       }
 
-      // Start image generation with configured provider
+      // Start image generation with configured provider.
+      // Attach Krea 2 FAL-path fields that don't belong in the DB schema but are
+      // needed by the orchestration layer (they're passed through generationData as-is).
+      const generationDataWithExtras = {
+        ...validatedData,
+        aspectRatio: (req.body as any).aspectRatio ?? '1:1',
+        creativity: (req.body as any).creativity ?? 'medium',
+      };
       logger.info(`🚀 Starting background image generation for ${generation.id}`);
-      generateImageWithProvider(generation.id, userId, validatedData, userApiKey || undefined).catch(error => {
+      generateImageWithProvider(generation.id, userId, generationDataWithExtras, userApiKey || undefined).catch(error => {
         logger.error("❌ Background generation failed:", error);
       });
 

@@ -131,7 +131,7 @@ export interface Txt2ImgInput {
   negativePrompt?: string;
   modelArn: string;
   baseModel: string;
-  /** Checkpoint display name — used to pick the Krea 2 tier (turbo vs raw). */
+  /** Checkpoint display name — used to pick the Krea 2 tier and FAL vs comfy path. */
   modelName?: string;
   width?: number;
   height?: number;
@@ -142,6 +142,10 @@ export interface Txt2ImgInput {
   seed?: number;
   quantity?: number;
   loras?: Array<{ id: string; strength: number }>;
+  /** Krea 2 FAL path: aspect ratio string e.g. "1:1", "16:9", "9:16". */
+  aspectRatio?: string;
+  /** Krea 2 FAL path: creativity level "raw" | "low" | "medium" | "high". */
+  creativity?: string;
 }
 
 /**
@@ -535,12 +539,20 @@ export class CivitAIOrchestrationService {
    * sanitization before calling.
    */
   async submitTxt2Img(input: Txt2ImgInput, userApiKey?: string): Promise<OrchestrationSubmitResult> {
-    // Krea 2 checkpoints don't fit the sdcpp sd1/sdxl/flux1 discriminators —
-    // they run on the comfy engine with `ecosystem:"krea2"` and the checkpoint
-    // URN in `diffusionModel`. Submitting them as sd1 silently wedges forever.
+    // Krea 2 routes to one of two paths:
+    //  • FAL  (engine:"fal")   — base Krea 2, no LoRAs, uses aspectRatio+creativity
+    //  • Comfy (engine:"comfy") — community checkpoints with LoRAs (rly*, turbo tiers)
+    // Routing signal: presence of LoRAs → comfy; otherwise → FAL.
     const bmLower = (input.baseModel || "").toLowerCase();
     if (bmLower.includes("krea")) {
-      return this.submitKrea2Txt2Img(input, userApiKey);
+      // Route by model identity, not LoRA presence:
+      //  • "Krea 2 Turbo" baseModel → comfy engine (community checkpoint tier,
+      //    supports LoRAs, uses steps/cfg — even when no LoRAs are selected)
+      //  • Base "KREA 2" → FAL engine (official endpoint, no LoRA support)
+      if (bmLower.includes("turbo")) {
+        return this.submitKrea2ComfyTxt2Img(input, userApiKey);
+      }
+      return this.submitKrea2FalTxt2Img(input, userApiKey);
     }
     const ecosystem = deriveImageEcosystem(input.baseModel, input.modelArn);
     const isFlux = ecosystem === "flux1";
@@ -619,19 +631,72 @@ export class CivitAIOrchestrationService {
   }
 
   /**
-   * Krea 2 community checkpoints run on the comfy engine:
-   * `engine:"comfy"`, `ecosystem:"krea2"`, `model:"turbo"|"raw"`, with the
-   * checkpoint AIR-URN in `diffusionModel` (nullable — omitting it uses the
-   * base Krea 2 weights). Verified via ?whatif=true: turbo ≈ 18 Buzz/img,
-   * raw ≈ 50 Buzz/img. Turbo tier wants low steps/CFG (defaults 8 / 1);
-   * raw behaves like a normal checkpoint (defaults 28 / 4).
+   * Krea 2 base model via CivitAI's FAL-backed endpoint.
+   * Documented at https://developer.civitai.com/orchestration/recipes/krea
+   * Key constraints:
+   *  – engine:"fal", model:"krea2", size:"medium"|"large"
+   *  – Uses aspectRatio (not width/height), creativity (not steps/cfg)
+   *  – Does NOT accept LoRAs, negativePrompt, steps, cfgScale, scheduler, clipSkip
+   *  – quantity fans out to parallel FAL calls (max 10)
    */
-  private async submitKrea2Txt2Img(
+  private async submitKrea2FalTxt2Img(
     input: Txt2ImgInput,
     userApiKey?: string
   ): Promise<OrchestrationSubmitResult> {
-    const isTurbo = (input.modelName || "").toLowerCase().includes("turbo");
-    const tier = isTurbo ? "turbo" : "raw";
+    const nmLower = (input.modelName || "").toLowerCase();
+    const size = nmLower.includes("large") ? "large" : "medium";
+
+    // aspectRatio must be one of the documented values; default 1:1
+    const VALID_RATIOS = ["1:1","4:3","3:2","16:9","2.35:1","4:5","2:3","9:16"];
+    const aspectRatio = VALID_RATIOS.includes(input.aspectRatio ?? "")
+      ? input.aspectRatio!
+      : "1:1";
+
+    const VALID_CREATIVITY = ["raw","low","medium","high"];
+    const creativity = VALID_CREATIVITY.includes(input.creativity ?? "")
+      ? input.creativity!
+      : "medium";
+
+    const stepInput: any = {
+      engine: "fal",
+      model: "krea2",
+      operation: "createImage",
+      size,
+      prompt: input.prompt,
+      aspectRatio,
+      creativity,
+      quantity: Math.max(1, Math.min(input.quantity ?? 1, 10)),
+    };
+    if (input.seed && input.seed > 0) stepInput.seed = input.seed;
+
+    logger.info(`🎨 Krea 2 FAL path: size=${size} aspectRatio=${aspectRatio} creativity=${creativity}`);
+    return this.submitWorkflow(
+      {
+        workflowTemplate: "txt2img",
+        tags: ["image", "text-to-image", "Krea 2"],
+        steps: [{ $type: "imageGen", input: stepInput }],
+      },
+      `imageGen/createImage base=Krea2 engine=fal size=${size}`,
+      userApiKey
+    );
+  }
+
+  /**
+   * Krea 2 community checkpoints via the comfy engine.
+   * Used when LoRAs are selected (rly* checkpoints, turbo community models).
+   * Tier mapping (aligns with ComfyUI Krea2ImageNode docs):
+   *  "turbo" in name → model:"turbo"  (~18 Buzz/img, steps 1-12, cfg 0-2)
+   *  "large"  in name → model:"large"  (higher quality)
+   *  otherwise        → model:"medium" (default community tier)
+   */
+  private async submitKrea2ComfyTxt2Img(
+    input: Txt2ImgInput,
+    userApiKey?: string
+  ): Promise<OrchestrationSubmitResult> {
+    const nmLower = (input.modelName || "").toLowerCase();
+    const isTurbo = nmLower.includes("turbo");
+    const isLarge = nmLower.includes("large");
+    const tier = isTurbo ? "turbo" : isLarge ? "large" : "medium";
 
     const steps = isTurbo
       ? Math.max(1, Math.min(input.steps ?? 8, 12))
@@ -668,13 +733,14 @@ export class CivitAIOrchestrationService {
     };
     if (input.seed && input.seed > 0) stepInput.seed = input.seed;
 
+    logger.info(`🎨 Krea 2 comfy path: tier=${tier} steps=${steps} cfg=${cfgScale} loras=${Object.keys(loras).length}`);
     return this.submitWorkflow(
       {
         workflowTemplate: "txt2img",
         tags: ["image", "text-to-image", "Krea 2"],
         steps: [{ $type: "imageGen", input: stepInput }],
       },
-      `imageGen/createImage base=Krea 2 eco=krea2/${tier}`,
+      `imageGen/createImage base=Krea2 engine=comfy tier=${tier}`,
       userApiKey
     );
   }
