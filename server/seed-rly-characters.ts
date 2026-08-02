@@ -82,8 +82,8 @@ export async function seedRlyKrea2Characters(): Promise<void> {
 
         await tx.insert(characters).values({
           name: subject,
-          description: `${subject} — RLY Thot Shot character for KREA 2 Turbo`,
-          basePrompt: `photorealistic photo of ${subject}, beautiful woman, detailed skin texture, natural lighting, ultra detailed, 8k`,
+          description: `RLY Thot Shot — ${subject} (KREA 2 Turbo)`,
+          basePrompt: `rly${subject.toLowerCase().replace(/\s+/g, "")}, photorealistic photo of ${subject}, beautiful woman, detailed skin texture, natural lighting, ultra detailed, 8k`,
           negativePrompt:
             "bad anatomy, ugly, blurry, low quality, deformed, extra limbs, watermark, text",
           category: "User Characters/Female",

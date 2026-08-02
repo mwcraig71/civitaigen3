@@ -530,7 +530,13 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
       hasCurrentModel: currentModelId && models.find(m => m.id === currentModelId) 
     });
     
-    if (models.length > 0 && (!currentModelId || currentModelId === '' || !models.find(m => m.id === currentModelId))) {
+    // Don't auto-select if a character with a specific model is already saved —
+    // the character's model should take precedence and will be applied by the
+    // character-restore useEffect below.
+    const savedCharacter = localStorage.getItem('generationPanel_selectedCharacter');
+    const characterHasModel = savedCharacter ? (() => { try { const c = JSON.parse(savedCharacter); return !!c?.baseModel; } catch { return false; } })() : false;
+
+    if (models.length > 0 && !characterHasModel && (!currentModelId || currentModelId === '' || !models.find(m => m.id === currentModelId))) {
       // Look for CyberRealistic Pony specifically first, then other preferred models
       const preferredModel = models.find(model => 
         model.name.toLowerCase().includes('cyberrealistic pony') ||
@@ -665,9 +671,11 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
       // Verify the saved character still exists in the database
       const characterExists = characters.find(c => c.id === selectedCharacter.id);
       if (characterExists) {
-        // Re-apply character settings (but don't change prompts that user may have modified)
-        if (selectedCharacter.baseModel && !form.getValues('modelId')) {
+        // Re-apply character settings. Always force the character's model —
+        // it should take precedence over any auto-selected default.
+        if (selectedCharacter.baseModel) {
           form.setValue('modelId', selectedCharacter.baseModel);
+          localStorage.setItem('generationPanel_modelId', JSON.stringify(selectedCharacter.baseModel));
         }
         
         // Update the prompt with current age from localStorage if this character was just loaded
