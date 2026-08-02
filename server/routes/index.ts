@@ -132,6 +132,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
+  // One-time backfill: copy video_url + video_thumbnail_url from generations into
+  // shared_images rows that were created before the share endpoint wrote these fields.
+  try {
+    const backfillResult = await db.execute(
+      `UPDATE shared_images si
+       SET video_url            = g.video_url,
+           video_thumbnail_url  = g.video_thumbnail_url
+       FROM generations g
+       WHERE si.generation_id   = g.id
+         AND g.video_url        IS NOT NULL
+         AND si.video_url       IS NULL`
+    );
+    const rowsUpdated = (backfillResult as any).rowCount ?? 0;
+    if (rowsUpdated > 0) {
+      logger.info(`✅ Backfilled video data into ${rowsUpdated} shared_images row(s)`);
+    } else {
+      logger.info('✅ shared_images video backfill: no rows needed updating');
+    }
+  } catch (err) {
+    logger.error('⚠️ shared_images video backfill failed:', err);
+  }
+
   // Recovery function for stuck generations on server restart
   async function recoverStuckGenerations() {
     try {
