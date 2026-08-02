@@ -2217,27 +2217,36 @@ export default function FipFap() {
 
     observerRef.current = new IntersectionObserver(
       (entries) => {
+        // Pick the SINGLE most-visible qualifying entry for activeIndex. With the
+        // expanded rootMargin both the outgoing and incoming slides can report
+        // ratio > 0.5 in the same callback; assigning per entry made activeIndex
+        // depend on arrival order and could flip back to the outgoing slide,
+        // pausing a video right after it started.
+        let bestIndex = -1;
+        let bestRatio = 0.5; // require > 50% visibility
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && entry.intersectionRatio > bestRatio) {
+            bestRatio = entry.intersectionRatio;
+            bestIndex = parseInt(entry.target.getAttribute('data-index') || '0');
+          }
+        });
+        if (bestIndex >= 0) {
+          const index = bestIndex;
+          setActiveIndex(prevIndex => {
+            if (prevIndex !== index) {
+              console.log(`✅ Updating activeIndex to ${index} (${(bestRatio * 100).toFixed(0)}% visible)`);
+              const currentImage = allImagesRef.current[index];
+              if (currentImage) {
+                lastInteractedImageRef.current = currentImage;
+              }
+              return index;
+            }
+            return prevIndex;
+          });
+        }
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
             const index = parseInt(entry.target.getAttribute('data-index') || '0');
-            console.log(`👁️ Observer: element ${index} is intersecting (ratio: ${entry.intersectionRatio.toFixed(2)})`);
-            
-            // Only update active index if the image is MOSTLY visible (>50%) to prevent using the wrong image for enhancements
-            if (entry.intersectionRatio > 0.5) {
-              setActiveIndex(prevIndex => {
-                if (prevIndex !== index) {
-                  console.log(`✅ Updating activeIndex to ${index} (image is ${(entry.intersectionRatio * 100).toFixed(0)}% visible)`);
-                  // Update last interacted image ref for reliable enhance button targeting using the ref to avoid stale closure
-                  const currentImage = allImagesRef.current[index];
-                  if (currentImage) {
-                    lastInteractedImageRef.current = currentImage;
-                    console.log(`🎯 Updated lastInteractedImage ref to:`, currentImage.id, currentImage.characterName);
-                  }
-                  return index;
-                }
-                return prevIndex;
-              });
-            }
 
             // Load more when approaching the end - trigger earlier for smoother experience
             // Start loading when 70% through current images or within last 15 images
@@ -2345,7 +2354,11 @@ export default function FipFap() {
     
     try {
       await apiRequest('POST', `/api/shared-images/${imageId}/view`);
-      queryClient.invalidateQueries({ queryKey: ['/api/shared-images'] });
+      // Deliberately NOT invalidating the /api/shared-images query here: a view
+      // increment fires 300ms after every slide activation, and invalidating
+      // refetches the whole feed while a video is starting — the refetch can
+      // reorder/rebuild the list and interrupt playback. The view count updates
+      // on the next natural refetch instead.
     } catch (error) {
       console.error('Failed to track view:', error);
     }
@@ -3221,7 +3234,10 @@ export default function FipFap() {
           const shouldLoadEagerly = index === activeIndex || (index > activeIndex && index <= activeIndex + eagerLoadRange);
           
           return (
-            <div key={`${image.id}-${index}`} data-index={index} className="snap-start snap-always">
+            // Stable id-only key: including the index remounts EVERY slide whenever
+            // positions shift (prepend, delete, refetch reorder), destroying the
+            // active <video> mid-playback. data-index stays positional for the observer.
+            <div key={image.id} data-index={index} className="snap-start snap-always">
               <FipFapSlide
                 image={image}
                 isActive={index === activeIndex}
