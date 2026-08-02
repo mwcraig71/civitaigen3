@@ -72,6 +72,10 @@ export default function Transform() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<Generation | null>(null);
 
+  // True when the current session was started from the fip-fap hand-off; used to
+  // register the finished video for the fip-fap completion popup.
+  const fromFipFapRef = useRef(false);
+
   // Poll active job when present (small interval — WS handles fast path)
   const { data: jobData } = useQuery<Generation>({
     queryKey: ["/api/generations", activeJobId],
@@ -171,6 +175,41 @@ export default function Transform() {
     }
   };
 
+  // Consume the fip-fap → Transform hand-off: preselect img2vid, fetch the
+  // handed-off image, and run it through the normal upload path so the source
+  // preview and object path are populated exactly as with a manual upload.
+  useEffect(() => {
+    const raw = localStorage.getItem('transformStudio_handoff');
+    if (!raw) return;
+    localStorage.removeItem('transformStudio_handoff');
+    let handoff: { sourceImageUrl?: string; from?: string };
+    try {
+      handoff = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!handoff?.sourceImageUrl) return;
+    fromFipFapRef.current = handoff.from === 'fip-fap';
+    setMode('img2vid');
+    (async () => {
+      try {
+        const res = await fetch(handoff.sourceImageUrl!, { credentials: 'include' });
+        if (!res.ok) throw new Error(`Could not load image (${res.status})`);
+        const blob = await res.blob();
+        const type = blob.type?.startsWith('image/') ? blob.type : 'image/jpeg';
+        const file = new File([blob], 'source-image', { type });
+        await handleFile(file);
+      } catch (e: any) {
+        toast({
+          title: 'Could not load image',
+          description: e.message || 'Please upload the image manually.',
+          variant: 'destructive',
+        });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const submit = useMutation({
     mutationFn: async () => {
       if (!sourceImageUrl) throw new Error("Please upload a source image first");
@@ -203,6 +242,11 @@ export default function Transform() {
       const data = await res.json();
       setActiveJobId(data.id);
       setActiveJob(null);
+      // Register this job so fip-fap can pop up the finished video if the
+      // user returns there before it completes.
+      if (mode === 'img2vid' && fromFipFapRef.current) {
+        localStorage.setItem('fipfap_pendingVideoJob', data.id);
+      }
       toast({
         title: mode === "img2vid" ? "Video transform queued" : "Image transform queued",
         description: `Cost: ${data.cost} Buzz · waiting on CivitAI...`,

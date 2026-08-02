@@ -368,6 +368,51 @@ export default function FipFap() {
   
   // WebSocket connection for real-time progress tracking (only when user exists)
   const { messageQueue, setMessageQueue, isConnected } = useWebSocket(user?.id || null);
+
+  // --- img2vid completion popup ---
+  // Transform Studio stores the job id under this key when a video generation is
+  // started from the fip-fap hand-off. While the user is here, poll that job and
+  // pop up the finished video (same poll pattern Transform itself uses).
+  const [pendingVideoJobId, setPendingVideoJobId] = useState<string | null>(
+    () => localStorage.getItem('fipfap_pendingVideoJob'),
+  );
+  const [completedVideo, setCompletedVideo] = useState<Generation | null>(null);
+  const { data: pendingVideoJob, error: pendingVideoJobError } = useQuery<Generation>({
+    queryKey: ['/api/generations', pendingVideoJobId],
+    enabled: !!pendingVideoJobId,
+    retry: 2,
+    refetchInterval: (q) => {
+      if (q.state.status === 'error') return false;
+      const g = q.state.data as Generation | undefined;
+      return g && (g.status === 'completed' || g.status === 'failed') ? false : 5000;
+    },
+  });
+  // If the job record can't be fetched (deleted, 404, auth), drop the pending
+  // key so we don't poll forever across sessions.
+  useEffect(() => {
+    if (pendingVideoJobError && pendingVideoJobId) {
+      localStorage.removeItem('fipfap_pendingVideoJob');
+      setPendingVideoJobId(null);
+    }
+  }, [pendingVideoJobError, pendingVideoJobId]);
+  useEffect(() => {
+    if (!pendingVideoJob || !pendingVideoJobId) return;
+    if (pendingVideoJob.status === 'completed') {
+      localStorage.removeItem('fipfap_pendingVideoJob');
+      setPendingVideoJobId(null);
+      if ((pendingVideoJob as any).videoUrl) {
+        setCompletedVideo(pendingVideoJob);
+      }
+    } else if (pendingVideoJob.status === 'failed') {
+      localStorage.removeItem('fipfap_pendingVideoJob');
+      setPendingVideoJobId(null);
+      toast({
+        title: 'Video generation failed',
+        description: 'Your image-to-video job did not complete.',
+        variant: 'destructive',
+      });
+    }
+  }, [pendingVideoJob, pendingVideoJobId, toast]);
   
   // Compute progress based on time and completion ratio
   // Linear progress from 10% to 89% over 40 seconds
@@ -3493,6 +3538,41 @@ export default function FipFap() {
         />
       )}
       
+      {/* Completed img2vid popup — shown when a video started from fip-fap finishes while the user is here */}
+      <Dialog open={!!completedVideo} onOpenChange={(open) => { if (!open) setCompletedVideo(null); }}>
+        <DialogContent className="bg-dark-card border-dark-border max-w-md w-[95vw] p-4">
+          <DialogHeader>
+            <DialogTitle className="text-white">Your video is ready!</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              The image-to-video generation you started has finished.
+            </DialogDescription>
+          </DialogHeader>
+          {completedVideo && (completedVideo as any).videoUrl && (
+            <video
+              src={(completedVideo as any).videoUrl}
+              controls
+              autoPlay
+              loop
+              muted
+              playsInline
+              poster={(completedVideo as any).videoThumbnailUrl || completedVideo.imageUrl || undefined}
+              className="w-full rounded-lg border border-dark-border bg-black"
+              data-testid="video-fipfap-completed"
+            />
+          )}
+          <DialogFooter className="pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setCompletedVideo(null)}
+              className="w-full sm:w-auto min-h-[44px]"
+              data-testid="button-close-video-popup"
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Enhancement Modal with Body Size Controls */}
       <Dialog open={showEnhanceModal} onOpenChange={setShowEnhanceModal}>
         <DialogContent className="bg-dark-card border-dark-border text-dark-text max-w-2xl w-[95vw] sm:w-full max-h-[85vh] sm:max-h-[90vh] overflow-y-auto overscroll-contain">

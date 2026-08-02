@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Heart, X, Download, EyeOff, Eye, Sparkles, Trash2, AlertTriangle, User, Edit3, FileText } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Heart, X, Download, EyeOff, Eye, Film, Trash2, AlertTriangle, User, Edit3, FileText } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiRequest } from '@/lib/queryClient';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { SharedImage } from '@/types';
+import { useLocation } from 'wouter';
 
 export interface FipFapSlideProps {
   image: SharedImage;
@@ -77,74 +78,34 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
     },
   });
 
-  // Upscale modal state
-  const [showUpscaleModal, setShowUpscaleModal] = useState(false);
-  const [upscaleModel, setUpscaleModel] = useState<'realesrgan' | 'gfpgan'>('realesrgan');
-  const [upscaleScale, setUpscaleScale] = useState<2 | 4>(2);
-  const [faceEnhancement, setFaceEnhancement] = useState(false);
-  
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   // Fetch available scene names
   const { data: availableScenes = [] } = useQuery<string[]>({
     queryKey: ['/api/shared-images/scenes'],
   });
 
-  // Upscale mutation
-  const upscaleMutation = useMutation({
-    mutationFn: async ({ generationId, scaleFactor, enhancementModel, faceEnhancement }: { 
-      generationId: string, 
-      scaleFactor: 2 | 4, 
-      enhancementModel: 'realesrgan' | 'gfpgan',
-      faceEnhancement: boolean 
-    }) => {
-      return await apiRequest('POST', '/api/enhance/submit', {
-        generationIds: [generationId],
-        scaleFactor,
-        enhancementModel,
-        faceEnhancement
-      });
-    },
-    onSuccess: (data: any) => {
-      setShowUpscaleModal(false);
+  // Hand the current image to Transform Studio's img2vid tab as the start image.
+  // Transform reads this key on mount, uploads the image, and clears the key.
+  const handleImg2VidClick = () => {
+    if (!image.imageUrl) {
       toast({
-        title: "Upscaling Started!",
-        description: data.message || "Your image is being upscaled. This may take a few minutes.",
-      });
-      // Refresh upscaled images list
-      queryClient.invalidateQueries({ queryKey: ['/api/enhance/user/all'] });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Upscaling Failed",
-        description: error.message || "Failed to start upscaling. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const handleUpscaleClick = () => {
-    if (!image.generationId) {
-      toast({
-        title: "Cannot Upscale",
-        description: "This image does not have generation data and cannot be upscaled.",
+        title: "Cannot Create Video",
+        description: "This image has no source file to animate.",
         variant: "destructive",
       });
       return;
     }
-    setShowUpscaleModal(true);
-  };
-
-  const submitUpscale = () => {
-    if (!image.generationId) return;
-    
-    upscaleMutation.mutate({
-      generationId: image.generationId,
-      scaleFactor: upscaleScale,
-      enhancementModel: upscaleModel,
-      faceEnhancement: upscaleModel === 'realesrgan' ? faceEnhancement : false,
-    });
+    // Use the same-origin display endpoint (watermark/proxy route) rather than
+    // the raw stored URL — raw community URLs can be cross-origin CDN links
+    // that fail browser fetch/CORS and can expire.
+    localStorage.setItem('transformStudio_handoff', JSON.stringify({
+      sourceImageUrl: getImageUrl(image),
+      from: 'fip-fap',
+    }));
+    navigate('/transform');
   };
 
   // Play/pause video when active state changes.
@@ -552,14 +513,14 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
           >
             <Download className="h-6 w-6" />
           </button>
-          {image.generationId && (
+          {!image.videoUrl && (
             <button
-              {...makeTapHandlers(() => handleUpscaleClick())}
+              {...makeTapHandlers(() => handleImg2VidClick())}
               className="flex flex-col items-center min-h-[44px] min-w-[44px] p-2 rounded-full bg-black/40 backdrop-blur-sm text-white transition-transform active:scale-90"
-              title="Upscale"
-              data-testid={`button-upscale-${image.id}`}
+              title="Image to Video"
+              data-testid={`button-img2vid-${image.id}`}
             >
-              <Sparkles className="h-6 w-6" />
+              <Film className="h-6 w-6" />
             </button>
           )}
           {!isMobile && image.prompt && (
@@ -798,148 +759,6 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
         </DialogContent>
       </Dialog>
 
-      {/* Upscale Modal - Mobile Optimized */}
-      <Dialog open={showUpscaleModal} onOpenChange={setShowUpscaleModal}>
-        <DialogContent className="bg-dark-card border-dark-border max-w-md w-[95vw] max-h-[90vh] overflow-y-auto overscroll-contain">
-          <button
-            onClick={() => setShowUpscaleModal(false)}
-            className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground z-50"
-            data-testid="button-close-upscale-modal"
-          >
-            <X className="h-5 w-5 text-slate-400 hover:text-white" />
-            <span className="sr-only">Close</span>
-          </button>
-          <DialogHeader>
-            <DialogTitle className="text-white flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-purple-400" />
-              Upscale Image
-            </DialogTitle>
-            <DialogDescription className="text-slate-400">
-              {upscaleModel === 'realesrgan' 
-                ? 'Upscale your image using AI-powered Real-ESRGAN technology. Each upscale costs 5 Buzz credits.'
-                : 'Upscale facial features using GFPGAN face restoration technology. Each upscale costs 5 Buzz credits.'}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-6 py-4">
-            {/* Enhancement Model Selection */}
-            <div className="space-y-3">
-              <label className="text-sm font-medium text-white">Upscaling Model</label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => setUpscaleModel('realesrgan')}
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    upscaleModel === 'realesrgan'
-                      ? 'border-purple-500 bg-purple-500/10'
-                      : 'border-dark-border hover:border-purple-400/50'
-                  }`}
-                  data-testid="button-model-realesrgan"
-                >
-                  <div className="text-lg font-bold text-white">Real-ESRGAN</div>
-                  <div className="text-xs text-slate-400">General upscaling</div>
-                </button>
-                <button
-                  onClick={() => setUpscaleModel('gfpgan')}
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    upscaleModel === 'gfpgan'
-                      ? 'border-purple-500 bg-purple-500/10'
-                      : 'border-dark-border hover:border-purple-400/50'
-                  }`}
-                  data-testid="button-model-gfpgan"
-                >
-                  <div className="text-lg font-bold text-white">GFPGAN</div>
-                  <div className="text-xs text-slate-400">Face restoration</div>
-                </button>
-              </div>
-            </div>
-
-            {/* Scale Factor Selection */}
-            <div className="space-y-3">
-              <label className="text-sm font-medium text-white">Upscale Factor</label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => setUpscaleScale(2)}
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    upscaleScale === 2
-                      ? 'border-purple-500 bg-purple-500/10'
-                      : 'border-dark-border hover:border-purple-400/50'
-                  }`}
-                  data-testid="button-scale-2x"
-                >
-                  <div className="text-lg font-bold text-white">2x</div>
-                  <div className="text-xs text-slate-400">Double resolution</div>
-                </button>
-                <button
-                  onClick={() => setUpscaleScale(4)}
-                  className={`p-4 rounded-lg border-2 transition-all ${
-                    upscaleScale === 4
-                      ? 'border-purple-500 bg-purple-500/10'
-                      : 'border-dark-border hover:border-purple-400/50'
-                  }`}
-                  data-testid="button-scale-4x"
-                >
-                  <div className="text-lg font-bold text-white">4x</div>
-                  <div className="text-xs text-slate-400">Quadruple resolution</div>
-                </button>
-              </div>
-            </div>
-
-            {/* Face Enhancement Toggle - Only for Real-ESRGAN */}
-            {upscaleModel === 'realesrgan' && (
-              <div className="flex items-center justify-between p-4 rounded-lg bg-dark-bg border border-dark-border">
-                <div className="space-y-1">
-                  <div className="text-sm font-medium text-white">Face Upscaling</div>
-                  <div className="text-xs text-slate-400">
-                    Apply additional upscaling to facial features
-                  </div>
-                </div>
-                <button
-                  onClick={() => setFaceEnhancement(!faceEnhancement)}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    faceEnhancement ? 'bg-purple-500' : 'bg-slate-700'
-                  }`}
-                  data-testid="toggle-face-enhancement"
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      faceEnhancement ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-              </div>
-            )}
-
-            {/* Credit Cost Display */}
-            <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/30">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-300">Total Cost:</span>
-                <span className="text-lg font-bold text-purple-400">
-                  5 Buzz Credits
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <DialogFooter className="flex-col sm:flex-row gap-2 pt-4">
-            <Button
-              variant="outline"
-              onClick={() => setShowUpscaleModal(false)}
-              className="border-dark-border text-slate-400 hover:text-white w-full sm:w-auto min-h-[44px]"
-              data-testid="button-cancel-upscale"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={submitUpscale}
-              disabled={upscaleMutation.isPending}
-              className="bg-purple-600 hover:bg-purple-700 text-white w-full sm:w-auto min-h-[44px]"
-              data-testid="button-submit-upscale"
-            >
-              {upscaleMutation.isPending ? 'Starting...' : 'Upscale Image'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </section>
   );
 }

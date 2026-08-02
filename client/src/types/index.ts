@@ -92,8 +92,6 @@ export interface Generation {
   generationType?: 'txt2img' | 'img2img' | 'img2vid';
   sourceImageUrl?: string;
   denoiseStrength?: number;
-  videoUrl?: string;
-  videoThumbnailUrl?: string;
   videoDurationSeconds?: number;
   videoFps?: number;
   videoModelEngine?: string;
@@ -164,6 +162,8 @@ export interface SharedImage {
   modelUsed?: string;
   imageUrl: string;
   thumbnailUrl?: string;
+  videoUrl?: string | null;
+  videoThumbnailUrl?: string | null;
   tags?: string[];
   isNSFW: boolean;
   likes: number;
