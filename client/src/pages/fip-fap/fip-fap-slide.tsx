@@ -37,6 +37,10 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
   // Keep a ref so async callbacks always see the latest isActive without stale closures
   const isActiveRef = useRef(isActive);
   isActiveRef.current = isActive;
+  // Debounce timer for pause — prevents a rapid isActive flicker (caused by the
+  // IntersectionObserver firing for the outgoing slide after the incoming one)
+  // from stopping a video that should be playing.
+  const pauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isEditingCharacter, setIsEditingCharacter] = useState(false);
   const [isViewingPrompt, setIsViewingPrompt] = useState(false);
   const [selectedCharacter, setSelectedCharacter] = useState(image.characterName || 'none');
@@ -144,18 +148,36 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
   };
 
   // Play/pause video when active state changes.
-  // canplay may have already fired while the slide was off-screen (isActive=false),
-  // so the onCanPlay prop handler did nothing. When isActive later flips to true the
-  // browser may have suspended the element. We catch a failed play() and attach a
-  // one-shot canplay listener so we retry as soon as the video is ready.
+  //
+  // Two problems this solves:
+  //
+  // 1. canplay fires while the slide is off-screen (isActive=false) so any
+  //    onCanPlay prop handler did nothing. When isActive flips true the browser
+  //    may have suspended the element. → catch a failed play() and register a
+  //    one-shot canplay listener to retry when the video is ready.
+  //
+  // 2. The IntersectionObserver uses rootMargin so both the outgoing and incoming
+  //    slides can simultaneously report ratio > 0.5 during the scroll-snap
+  //    animation. entries.forEach processes them in arrival order, which can
+  //    briefly set activeIndex back to the outgoing slide — causing isActive to
+  //    flicker false→true in rapid succession. Without a guard this stops the
+  //    video immediately after it starts. → debounce pause() by 200 ms; if
+  //    isActive becomes true again within that window the timeout is cancelled
+  //    and the video keeps playing uninterrupted.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
     if (isActive) {
-      video.currentTime = 0;
+      // Cancel any pending debounced pause so a brief flicker doesn't stop us
+      if (pauseTimerRef.current !== null) {
+        clearTimeout(pauseTimerRef.current);
+        pauseTimerRef.current = null;
+      }
       const attempt = video.play();
       if (attempt !== undefined) {
         attempt.catch(() => {
+          // play() failed (video not ready yet) — retry on canplay
           const retry = () => {
             if (isActiveRef.current) video.play().catch(() => {});
             video.removeEventListener('canplay', retry);
@@ -164,8 +186,19 @@ export function FipFapSlide({ image, isActive, shouldLoadEagerly = false, onLoad
         });
       }
     } else {
-      video.pause();
+      // Debounce: only pause if still inactive after 200 ms
+      pauseTimerRef.current = setTimeout(() => {
+        pauseTimerRef.current = null;
+        if (!isActiveRef.current) video.pause();
+      }, 200);
     }
+
+    return () => {
+      if (pauseTimerRef.current !== null) {
+        clearTimeout(pauseTimerRef.current);
+        pauseTimerRef.current = null;
+      }
+    };
   }, [isActive]);
 
   // Sync selectedCharacter state when image.characterName changes
