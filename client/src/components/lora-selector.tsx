@@ -209,19 +209,17 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                   <p className="text-xs text-slate-400 truncate">{model.baseModel}</p>
                 </div>
 
-                {/* Move between groups — only show when groups are active */}
-                {showGroups && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id)}
-                    className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
-                    title={isChar ? 'Move to Style' : 'Move to Character'}
-                  >
-                    {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
-                  </Button>
-                )}
+                {/* Move between groups — always visible so user can build the character group */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id)}
+                  className={`h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                  title={isChar ? 'Move to Style group' : 'Move to Character group'}
+                >
+                  {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                </Button>
 
                 <Popover>
                   <PopoverTrigger asChild>
