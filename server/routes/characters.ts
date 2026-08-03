@@ -28,6 +28,7 @@ import OpenAI from "openai";
 import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
 
 import { type RouteContext, eq, and } from "./context";
+import { generateCharacterPreviewImage, backfillSharedCharacterPreviews } from "../character-preview-generator";
 
 export function registerCharactersRoutes(app: Express, ctx: RouteContext) {
   // Character management routes
@@ -381,6 +382,56 @@ export function registerCharactersRoutes(app: Express, ctx: RouteContext) {
     } catch (error) {
       logger.error("Error setting default preset:", error);
       res.status(500).json({ error: "Failed to set default preset" });
+    }
+  });
+
+  /**
+   * POST /api/admin/backfill-character-previews
+   *
+   * Admin-only: generate and persist a preview image for every shared character
+   * that currently has no imageUrl.  Runs the full backfill in the background
+   * and returns immediately with an accepted status; progress is visible in
+   * server logs.  Optionally pass `{ characterId }` in the body to process a
+   * single character instead of all.
+   */
+  app.post("/api/admin/backfill-character-previews", requireAdmin, async (req: any, res) => {
+    try {
+      const { characterId } = req.body || {};
+
+      if (characterId) {
+        // Single-character mode
+        const character = await storage.getCharacter(characterId);
+        if (!character) {
+          return res.status(404).json({ error: "Character not found" });
+        }
+        if (!character.isShared) {
+          return res.status(400).json({ error: "Only shared characters can be backfilled via this endpoint" });
+        }
+
+        res.json({
+          accepted: true,
+          message: `Preview generation started for character "${character.name}" — check server logs for progress`,
+        });
+
+        // Fire-and-forget
+        generateCharacterPreviewImage(character).catch((err) => {
+          logger.error(`❌ Backfill: preview generation failed for "${character.name}": ${err instanceof Error ? err.message : String(err)}`);
+        });
+      } else {
+        // Full backfill mode
+        res.json({
+          accepted: true,
+          message: "Backfill started for all shared characters without preview images — check server logs for progress",
+        });
+
+        // Fire-and-forget
+        backfillSharedCharacterPreviews().catch((err) => {
+          logger.error(`❌ Backfill: unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    } catch (error) {
+      logger.error("Error starting character preview backfill:", error);
+      res.status(500).json({ error: "Failed to start backfill" });
     }
   });
 

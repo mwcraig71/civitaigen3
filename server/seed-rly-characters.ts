@@ -2,6 +2,7 @@ import { db } from "./db";
 import { characters, models } from "@shared/schema";
 import { and, eq, ilike, or, sql } from "drizzle-orm";
 import { logger } from "./logger";
+import { generateCharacterPreviewImage } from "./character-preview-generator";
 
 /**
  * Idempotent startup seeder: creates one shared character per "RLY Thot Shot"
@@ -20,7 +21,7 @@ import { logger } from "./logger";
  */
 export async function seedRlyKrea2Characters(): Promise<void> {
   try {
-    await db.transaction(async (tx) => {
+    const newCharacterIds = await db.transaction(async (tx) => {
       // Serialize concurrent seeder runs (released automatically at commit)
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('seed-rly-krea2-characters'))`);
 
@@ -67,6 +68,8 @@ export async function seedRlyKrea2Characters(): Promise<void> {
       }
 
       let created = 0;
+      const newCharacterIds: string[] = [];
+
       for (const lora of rlyLoras) {
         if (seededLoraIds.has(lora.id)) continue;
 
@@ -80,7 +83,7 @@ export async function seedRlyKrea2Characters(): Promise<void> {
           continue;
         }
 
-        await tx.insert(characters).values({
+        const [inserted] = await tx.insert(characters).values({
           name: subject,
           description: `RLY Thot Shot — ${subject} (KREA 2 Turbo)`,
           basePrompt: `rly${subject.toLowerCase().replace(/\s+/g, "")}, photorealistic photo of ${subject}, beautiful woman, detailed skin texture, natural lighting, ultra detailed, 8k`,
@@ -95,16 +98,42 @@ export async function seedRlyKrea2Characters(): Promise<void> {
           steps: 10,
           cfgScale: 15,
           loras: [{ id: lora.id, strength: 1.0 }],
-        });
+        }).returning({ id: characters.id, name: characters.name });
         seededLoraIds.add(lora.id);
         created++;
+        if (inserted) newCharacterIds.push(inserted.id);
         logger.info(`✅ RLY character seeder: created shared character "${subject}" (LoRA: ${lora.name})`);
       }
 
       if (created > 0) {
         logger.info(`✅ RLY character seeder: created ${created} shared character(s) on "${turbo.name}"`);
       }
+
+      // Return the new IDs so we can schedule preview generation after the
+      // transaction commits (generation requires network calls that cannot
+      // run inside a DB transaction).
+      return newCharacterIds;
     });
+
+    // Schedule preview image generation for any newly created characters.
+    // This runs outside the transaction so a generation failure cannot roll
+    // back the already-committed character rows.
+    if (newCharacterIds && newCharacterIds.length > 0) {
+      logger.info(`🖼️  RLY character seeder: scheduling preview generation for ${newCharacterIds.length} new character(s)`);
+      // Fire-and-forget — do not block server startup.
+      setImmediate(async () => {
+        for (const id of newCharacterIds) {
+          try {
+            const character = await (await import("./storage")).storage.getCharacter(id);
+            if (character) {
+              await generateCharacterPreviewImage(character);
+            }
+          } catch (err) {
+            logger.error(`⚠️ RLY character seeder: preview generation failed for character ${id}:`, err);
+          }
+        }
+      });
+    }
   } catch (error) {
     logger.error("⚠️ RLY character seeder failed:", error);
   }
