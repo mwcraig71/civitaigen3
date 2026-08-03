@@ -16,6 +16,8 @@ cookies.txt
 *_export.csv
 *.sql
 *.dump
+# Exception: Drizzle tracked migration files must be versioned
+!migrations/*.sql
 image_urls_for_migration.json
 migration_summary.json
 
