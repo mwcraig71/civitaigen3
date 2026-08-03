@@ -16,6 +16,7 @@ import { ErrorLogger } from "../error-logger";
 import { insertGenerationSchema, insertFavoriteSchema, insertModelLikeSchema, insertCharacterSchema, insertQualityGroupSchema, insertSavedSceneSchema, insertSavedPromptSchema, insertSignupPromotionSchema, insertCreditPackageSchema, insertCreditTransactionSchema, insertEventSchema, insertEventStepSchema, insertFavoritePromptWordSchema, transformRequestSchema, generations, models } from "@shared/schema";
 import { civitaiOrchestration } from "../civitai-orchestration";
 import { db } from "../db";
+import { sql } from "drizzle-orm";
 import type { User, Generation } from "@shared/schema";
 import Stripe from "stripe";
 import { ZodError, z } from "zod";
@@ -251,6 +252,47 @@ export function registerAdminTrackingRoutes(app: Express, ctx: RouteContext) {
     }
   });
   
+  // ── Model Performance Leaderboard ────────────────────────────────────────────
+  // Returns per-model median/P90 queue and generate latency from passively-
+  // recorded timing data.  Only includes generations that have timing data
+  // (queue_ms IS NOT NULL), so results grow automatically over time.
+  app.get('/api/admin/model-performance', requireAdmin, async (req, res) => {
+    try {
+      // Only rows with timing data are included — success% is intentionally omitted
+      // because timing is currently recorded only on success, so including a
+      // successCount/totalCount here would give a misleadingly perfect 100% rate.
+      // Task #52 tracks extending timing to failures so the metric can be added later.
+      const rows = await db.execute(sql`
+        SELECT
+          m.id                                                                          AS "modelId",
+          m.name                                                                        AS "modelName",
+          m.base_model                                                                  AS "baseModel",
+          COUNT(*)                                                                      AS "timedCount",
+          COUNT(*) FILTER (WHERE g.created_at > NOW() - INTERVAL '24 hours')           AS "count24h",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY g.queue_ms))::int          AS "medianQueueMs",
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY g.queue_ms))::int          AS "p90QueueMs",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY g.generate_ms))::int       AS "medianGenerateMs",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+            ORDER BY COALESCE(g.queue_ms, 0) + COALESCE(g.generate_ms, 0)
+          ))::int                                                                       AS "medianTotalMs",
+          ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (
+            ORDER BY COALESCE(g.queue_ms, 0) + COALESCE(g.generate_ms, 0)
+          ))::int                                                                       AS "p90TotalMs"
+        FROM generations g
+        JOIN models m ON g.model_id = m.id
+        WHERE g.queue_ms IS NOT NULL
+        GROUP BY m.id, m.name, m.base_model
+        ORDER BY PERCENTILE_CONT(0.5) WITHIN GROUP (
+          ORDER BY COALESCE(g.queue_ms, 0) + COALESCE(g.generate_ms, 0)
+        ) ASC NULLS LAST
+      `);
+      res.json({ models: rows.rows });
+    } catch (error) {
+      logger.error('Failed to fetch model performance:', error);
+      res.status(500).json({ error: 'Failed to fetch model performance data' });
+    }
+  });
+
   // Record tracking event (called by client when user is being tracked)
   app.post('/api/tracking/event', isAuthenticated, async (req, res) => {
     try {

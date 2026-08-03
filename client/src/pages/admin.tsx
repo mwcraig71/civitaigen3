@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import ModelPerformanceTab from "@/components/admin/model-performance-tab";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import { format } from "date-fns";
@@ -1779,6 +1780,10 @@ export default function AdminPage() {
               <TabsTrigger value="api" data-testid="tab-api" className="flex-col gap-1 h-16 sm:h-10 sm:flex-row transition-all duration-200">
                 <Key className="h-4 w-4" />
                 <span className="text-xs sm:text-sm">API</span>
+              </TabsTrigger>
+              <TabsTrigger value="performance" data-testid="tab-performance" className="flex-col gap-1 h-16 sm:h-10 sm:flex-row transition-all duration-200">
+                <Zap className="h-4 w-4" />
+                <span className="text-xs sm:text-sm">Performance</span>
               </TabsTrigger>
             </TabsList>
           </div>
@@ -4857,6 +4862,10 @@ export default function AdminPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="performance" className="animate-in fade-in-0 duration-200">
+            <ModelPerformanceTab />
           </TabsContent>
         </Tabs>
       </div>

@@ -91,6 +91,8 @@ export interface OrchestrationJobResponse {
       seed?: number;
     }>;
     scheduled?: boolean;
+    /** Raw CivitAI step status — "preparing" = queued, "processing" = executing, terminal values = done/failed */
+    stepStatus?: string;
   }>;
 }
 
@@ -917,7 +919,7 @@ export class CivitAIOrchestrationService {
       // be truthy and the poller would never give up.
       return {
         token: workflowId,
-        jobs: [{ jobId: workflowId, cost: wf.cost || 0, scheduled: false }],
+        jobs: [{ jobId: workflowId, cost: wf.cost || 0, scheduled: false, stepStatus }],
       };
     }
 
@@ -928,6 +930,7 @@ export class CivitAIOrchestrationService {
         cost: wf.cost || 0,
         result: media,
         scheduled: !terminal,
+        stepStatus,
       }],
     };
   }

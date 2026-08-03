@@ -62,6 +62,7 @@ export interface IStorage {
   createGeneration(generation: InsertGeneration & { userId: string; batchId?: string | null }): Promise<Generation>;
   updateGeneration(id: string, updates: Partial<Generation>): Promise<Generation | undefined>;
   updateGenerationStatus(id: string, status: string, imageUrl?: string, blobKey?: string): Promise<void>;
+  updateGenerationTiming(id: string, queueMs: number, generateMs: number): Promise<void>;
   updateGenerationFileStorage(id: string, imagePath: string, metadataPath: string, originalData: any): Promise<Generation | undefined>;
   deleteGeneration(id: string): Promise<void>;
   deleteGenerationAsAdmin(id: string, reason?: string): Promise<{ generation: Generation; user?: User }>;
@@ -1087,6 +1088,13 @@ export class DatabaseStorage implements IStorage {
     await db
       .update(generations)
       .set(updateData)
+      .where(eq(generations.id, id));
+  }
+
+  async updateGenerationTiming(id: string, queueMs: number, generateMs: number): Promise<void> {
+    await db
+      .update(generations)
+      .set({ queueMs, generateMs })
       .where(eq(generations.id, id));
   }
 

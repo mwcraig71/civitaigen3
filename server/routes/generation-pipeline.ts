@@ -1092,7 +1092,10 @@ function friendlyGenerationError(raw: string): string {
       delayWarningSent?: boolean,  // Track if delay warning has been sent
       lastQueueStatus?: string,  // Latest queue position message from CivitAI serviceProviders
       resultsUnavailableSince?: number,  // When CivitAI first returned results whose blobs never became available (dead output)
-      generationCreatedAtMs?: number  // Persisted createdAt of the oldest generation, so dead-output timeout survives restarts/republishes
+      generationCreatedAtMs?: number,  // Persisted createdAt of the oldest generation, so dead-output timeout survives restarts/republishes
+      // Passive latency tracking for the model performance leaderboard
+      startedAt: number,           // Timestamp when polling started (≈ job submission time)
+      queueExitedAt?: number,      // Timestamp when job first transitioned from queued → running
     }>();
 
     async startPolling(token: string, generationId: string, userId: string, civitaiService: any, civitaiRequest: any, userApiKey?: string) {
@@ -1117,7 +1120,10 @@ function friendlyGenerationError(raw: string): string {
         lastProgressTime: Date.now(),
         processedImages: new Set<string>(),
         apiKey: userApiKey,  // Store the API key used to create this job
-        delayWarningSent: false  // Track if we've sent the 3-minute delay warning
+        delayWarningSent: false,  // Track if we've sent the 3-minute delay warning
+        // Passive latency tracking for the model performance leaderboard
+        startedAt: Date.now(),
+        queueExitedAt: undefined as number | undefined,
       };
 
       this.activePollers.set(token, pollerInfo);
@@ -1249,6 +1255,19 @@ function friendlyGenerationError(raw: string): string {
           } else if (!job.scheduled && pollerInfo.lastQueueStatus) {
             // Job has left the queue — clear the queue status message
             pollerInfo.lastQueueStatus = undefined;
+          }
+
+          // Capture the moment the job transitions from queued → actively executing.
+          // CivitAI step statuses: "preparing" = queued, "processing" = generating,
+          // terminal values = done. `scheduled: false` only means terminal — it does NOT
+          // distinguish queued vs executing, so we use stepStatus for the split.
+          if (
+            job.stepStatus &&
+            job.stepStatus !== "preparing" &&
+            pollerInfo.queueExitedAt === undefined
+          ) {
+            pollerInfo.queueExitedAt = Date.now();
+            logger.info(`⏱️ Queue exit recorded for token ${token.substring(0, 20)}: stepStatus=${job.stepStatus}, queue_ms≈${Date.now() - pollerInfo.startedAt}`);
           }
 
           if (job.result && Array.isArray(job.result) && job.result.length > 0) {
@@ -1444,6 +1463,17 @@ function friendlyGenerationError(raw: string): string {
               );
             if (allResultsProcessed) {
               logger.info(`✅ Batch poller completed for token: ${token.substring(0, 20)}...`);
+
+              // Record passive timing for the model performance leaderboard
+              if (pollerInfo.queueExitedAt !== undefined) {
+                const now = Date.now();
+                const queueMs = pollerInfo.queueExitedAt - pollerInfo.startedAt;
+                const generateMs = now - pollerInfo.queueExitedAt;
+                for (const gid of pollerInfo.generations) {
+                  storage.updateGenerationTiming(gid, Math.max(0, queueMs), Math.max(0, generateMs))
+                    .catch(e => logger.error(`Failed to record timing for ${gid}:`, e));
+                }
+              }
               
               // CRITICAL FIX: Only send 100% progress when ALL images in the batch are complete
               // Each poller handles 1 image, so we need to check the batch tracker

@@ -191,6 +191,10 @@ export const generations = pgTable("generations", {
   contentRating: text("content_rating").default("unrated"), // unrated, pg, r - for splash page classification
   createdAt: timestamp("created_at").defaultNow(),
   completedAt: timestamp("completed_at"),
+  // Passive latency tracking — populated by the BatchPoller on completion/failure.
+  // Used by the admin model-performance leaderboard.
+  queueMs: integer("queue_ms"),      // ms from submission to CivitAI picking up the job
+  generateMs: integer("generate_ms"), // ms from job start to completion
 }, (table) => [
   index("idx_generations_user_id").on(table.userId),
   index("idx_generations_status").on(table.status),
