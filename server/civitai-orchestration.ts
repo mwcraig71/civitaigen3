@@ -545,11 +545,13 @@ export class CivitAIOrchestrationService {
     // Routing signal: presence of LoRAs → comfy; otherwise → FAL.
     const bmLower = (input.baseModel || "").toLowerCase();
     if (bmLower.includes("krea")) {
-      // Route by model identity, not LoRA presence:
-      //  • "Krea 2 Turbo" baseModel → comfy engine (community checkpoint tier,
-      //    supports LoRAs, uses steps/cfg — even when no LoRAs are selected)
-      //  • Base "KREA 2" → FAL engine (official endpoint, no LoRA support)
-      if (bmLower.includes("turbo")) {
+      // Routing rules:
+      //  • "Krea 2 Turbo" baseModel → always comfy (community checkpoint, supports LoRAs)
+      //  • Base "KREA 2" + LoRAs selected → comfy (FAL endpoint has no LoRA support)
+      //  • Base "KREA 2" + no LoRAs → FAL (fast path with aspectRatio/creativity)
+      const isTurbo = bmLower.includes("turbo");
+      const hasLoras = (input.loras ?? []).length > 0;
+      if (isTurbo || hasLoras) {
         return this.submitKrea2ComfyTxt2Img(input, userApiKey);
       }
       return this.submitKrea2FalTxt2Img(input, userApiKey);

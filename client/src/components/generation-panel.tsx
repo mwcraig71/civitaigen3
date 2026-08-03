@@ -2994,11 +2994,10 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                     modelsLoading={modelsLoading}
                   />
 
-              {/* LoRA Selector — hidden for base Krea 2 (FAL path) because
-                  the FAL endpoint does not support LoRAs. Visible for all other
-                  models and for Krea 2 Turbo community checkpoints (comfy path).
-                  Detection mirrors server routing: baseModel includes "turbo" → comfy. */}
-              {!(selectedModelFamily === 'krea2' && !selectedModelBaseModel.toLowerCase().includes('turbo')) && (
+              {/* LoRA Selector — visible for all models including base Krea 2.
+                  When LoRAs are selected with base Krea 2, the server auto-routes
+                  through the comfy engine so they actually apply. */}
+              {(
                 <LoRASelector
                   selectedLoras={form.watch('loras')}
                   onLorasChange={(loras) => form.setValue('loras', loras)}

@@ -37,12 +37,17 @@ export function GenerationParamsFields({
   modelBaseModel,
 }: GenerationParamsFieldsProps) {
   const bmLower = (modelBaseModel || '').toLowerCase();
+  const watchedLoras = form.watch('loras') ?? [];
 
-  // Mirrors server routing exactly: baseModel includes "turbo" → comfy; else → FAL.
-  // Krea 2 FAL path: base model (no LoRAs, aspectRatio + creativity controls).
-  const isKrea2Fal = modelFamily === 'krea2' && !bmLower.includes('turbo');
-  // Krea 2 comfy path: "Krea 2 Turbo" community checkpoints (steps/cfg, LoRAs visible).
-  const isKrea2Comfy = modelFamily === 'krea2' && bmLower.includes('turbo');
+  // Mirrors server routing exactly:
+  //  • Turbo baseModel → always comfy
+  //  • Base Krea 2 + LoRAs selected → comfy (FAL has no LoRA support)
+  //  • Base Krea 2 + no LoRAs → FAL (aspectRatio + creativity controls)
+  const isTurbo = bmLower.includes('turbo');
+  const hasLoras = watchedLoras.length > 0;
+  const isKrea2Fal = modelFamily === 'krea2' && !isTurbo && !hasLoras;
+  // Krea 2 comfy: Turbo always, or base Krea 2 with LoRAs selected.
+  const isKrea2Comfy = modelFamily === 'krea2' && (isTurbo || hasLoras);
   // Flux hides clipSkip.
   const isFlux = modelFamily === 'flux';
 
