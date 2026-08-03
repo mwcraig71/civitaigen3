@@ -243,9 +243,15 @@ export default function Transform() {
       setActiveJobId(data.id);
       setActiveJob(null);
       // Register this job so fip-fap can pop up the finished video if the
-      // user returns there before it completes.
+      // user returns there before it completes, AND so the global notification
+      // hook can fire a toast if the user is anywhere else in the app.
       if (mode === 'img2vid' && fromFipFapRef.current) {
         localStorage.setItem('fipfap_pendingVideoJob', data.id);
+        // `storage` events only fire in *other* tabs, so dispatch a custom event
+        // to notify same-tab listeners (the global notification hook).
+        window.dispatchEvent(
+          new CustomEvent('fipfap:video-job-registered', { detail: { jobId: data.id } }),
+        );
       }
       toast({
         title: mode === "img2vid" ? "Video transform queued" : "Image transform queued",

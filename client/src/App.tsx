@@ -15,6 +15,7 @@ import { usePageTracking } from "@/lib/tracking";
 import { DemoBanner } from "@/components/demo-banner";
 import { ImpersonationBanner } from "@/components/impersonation-banner";
 import { BuyBuzzPopup } from "@/components/buy-buzz-popup";
+import { usePendingVideoNotification } from "@/hooks/use-pending-video-notification";
 
 // Lazy load page components to reduce initial bundle size
 const Home = lazy(() => import("@/pages/home"));
@@ -106,6 +107,9 @@ function Router() {
   
   // Track page navigation for admin monitoring
   usePageTracking();
+
+  // Global: notify the user anywhere in the app when their fip-fap video finishes
+  usePendingVideoNotification();
   
   // Get user data to check preferences
   const { data: user } = useQuery<{ defaultLandingPage?: string }>({
