@@ -52,6 +52,7 @@ export interface IStorage {
   getAllModels(): Promise<Model[]>;
   getPopularModels(): Promise<Model[]>;
   createModel(model: InsertModel): Promise<Model>;
+  updateModel(id: string, updates: Partial<InsertModel>): Promise<Model | undefined>;
 
   // Generations
   getGeneration(id: string): Promise<Generation | undefined>;
@@ -998,6 +999,15 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return newModel;
+  }
+
+  async updateModel(id: string, updates: Partial<InsertModel>): Promise<Model | undefined> {
+    const [updated] = await db
+      .update(models)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(models.id, id))
+      .returning();
+    return updated || undefined;
   }
 
   // Generations - Database Implementation

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import ModelPerformanceTab from "@/components/admin/model-performance-tab";
+import AdminModelsPanel from "@/components/admin/admin-models-panel";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import { format } from "date-fns";
@@ -3016,40 +3017,7 @@ export default function AdminPage() {
 
           {/* Models Tab */}
           <TabsContent value="models" className="space-y-4 sm:space-y-6 animate-in fade-in-0 duration-200">
-            <Card>
-              <CardHeader>
-                <CardTitle>Model Management</CardTitle>
-                <CardDescription>Manage AI models and their settings</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {allModels?.slice(0, 10).map((model) => (
-                    <div key={model.id} className="flex items-center justify-between p-4 border rounded-lg">
-                      <div className="flex items-center gap-4">
-                        {model.imageUrl && (
-                          <img 
-                            src={model.imageUrl} 
-                            alt={model.name}
-                            className="w-12 h-12 object-cover rounded"
-                          />
-                        )}
-                        <div>
-                          <p className="font-medium">{model.name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {model.type} • {model.baseModel}
-                          </p>
-                          <div className="flex gap-2 mt-1">
-                            <Badge variant="outline">{model.downloads} downloads</Badge>
-                            <Badge variant="outline">{model.likes} likes</Badge>
-                            {model.featured && <Badge>Featured</Badge>}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <AdminModelsPanel allModels={allModels} />
           </TabsContent>
 
 

@@ -177,8 +177,10 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
   }, [loraModels, favoriteModelIds, tab, baseModelFilter]);
 
   // Classify a LoRA for the browse panels
-  // Priority: explicit user assignment > auto-detect by name
+  // Priority: server-side loraCategory > explicit user assignment > auto-detect by name
   const isCharBrowse = (lora: Model) => {
+    if (lora.loraCategory === 'character') return true;    // admin-set canonical category wins
+    if (lora.loraCategory === 'style') return false;       // admin-set canonical category wins
     if (localCharIds.has(lora.id)) return true;           // user (or auto-detect) set as character
     if (userRemovedIds.current.has(lora.id)) return false; // user explicitly moved to style
     return isCharacterLoraName(lora.name ?? '');           // name-based default
@@ -246,8 +248,16 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
       <CardContent className="space-y-4">
         {/* Active LoRAs — grouped into Character / Style when applicable */}
         {selectedLoras.length > 0 && (() => {
-          const charLoras = selectedLoras.filter(l => localCharIds.has(l.id));
-          const otherLoras = selectedLoras.filter(l => !localCharIds.has(l.id));
+          // Use the same canonical classifier as the browse panels:
+          // server loraCategory > local override > name heuristic
+          const charLoras = selectedLoras.filter(l => {
+            const model = getLoRAModel(l.id);
+            return model ? isCharBrowse(model) : localCharIds.has(l.id);
+          });
+          const otherLoras = selectedLoras.filter(l => {
+            const model = getLoRAModel(l.id);
+            return model ? !isCharBrowse(model) : !localCharIds.has(l.id);
+          });
           const showGroups = selectedLoras.length > 0;
 
           const renderRow = (lora: LoRAConfig, isChar: boolean) => {
@@ -273,17 +283,19 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                   <p className="text-xs text-slate-400 truncate">{model.baseModel}</p>
                 </div>
 
-                {/* Move between groups — desktop only */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id)}
-                  className={`hidden sm:inline-flex h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
-                  title={isChar ? 'Move to Style group' : 'Move to Character group'}
-                >
-                  {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
-                </Button>
+                {/* Move between groups — desktop only; hidden when admin has set a canonical category */}
+                {!model.loraCategory && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id)}
+                    className={`hidden sm:inline-flex h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                    title={isChar ? 'Move to Style group' : 'Move to Character group'}
+                  >
+                    {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                  </Button>
+                )}
 
                 <Popover>
                   <PopoverTrigger asChild>
@@ -462,14 +474,17 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
                   </div>
 
                   {/* Move between groups — desktop only */}
-                  <Button
-                    type="button" variant="ghost" size="sm"
-                    onClick={(e) => { e.stopPropagation(); isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id); }}
-                    className={`hidden sm:inline-flex h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
-                    title={isChar ? 'Move to Style group' : 'Move to Character group'}
-                  >
-                    {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
-                  </Button>
+                  {/* Move between groups — hidden when admin has set a canonical category */}
+                  {!lora.loraCategory && (
+                    <Button
+                      type="button" variant="ghost" size="sm"
+                      onClick={(e) => { e.stopPropagation(); isChar ? removeFromCharacter(lora.id) : moveToCharacter(lora.id); }}
+                      className={`hidden sm:inline-flex h-9 w-9 p-0 shrink-0 ${isChar ? 'text-purple-400 hover:text-blue-400 hover:bg-blue-500/10' : 'text-slate-400 hover:text-purple-400 hover:bg-purple-500/10'}`}
+                      title={isChar ? 'Move to Style group' : 'Move to Character group'}
+                    >
+                      {isChar ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUp className="h-3.5 w-3.5" />}
+                    </Button>
+                  )}
 
                   <Button
                     type="button" variant="ghost" size="sm"

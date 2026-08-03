@@ -57,6 +57,7 @@ export interface Model {
   strengthMin?: number;
   strengthMax?: number;
   activationWords?: string[];
+  loraCategory?: string | null; // "character" | "style" | null — admin-set canonical grouping
   createdAt: string;
 }
 

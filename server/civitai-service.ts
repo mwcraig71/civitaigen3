@@ -284,6 +284,7 @@ export class CivitAIService {
       allowCommercialUse: null,
       allowDerivatives: null,
       allowDifferentLicense: null,
+      loraCategory: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };

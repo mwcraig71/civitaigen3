@@ -109,6 +109,7 @@ export const models = pgTable("models", {
   allowDifferentLicense: boolean("allow_different_license").default(true),
   featured: boolean("featured").default(false),
   status: text("status").default("published"), // draft, published, archived
+  loraCategory: text("lora_category"), // "character" | "style" | null — admin-set canonical grouping for LoRAs
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -727,6 +728,7 @@ export const insertModelSchema = createInsertSchema(models).pick({
   activationWords: true,
   modelVersion: true,
   arn: true,
+  loraCategory: true,
 });
 
 export const insertGenerationSchema = createInsertSchema(generations).pick({

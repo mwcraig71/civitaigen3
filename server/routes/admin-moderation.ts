@@ -22,7 +22,7 @@ import { ZodError, z } from "zod";
 import { setupAuth, isAuthenticated } from "../googleAuth";
 import multer from "multer";
 import Replicate from "replicate";
-import { responseCache, CACHE_TTL, createCacheKey } from "../cache";
+import { responseCache } from "../cache";
 import { getCleanupStats, runImageCleanup, RETENTION_POLICY } from "../image-cleanup-service";
 import OpenAI from "openai";
 import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
@@ -200,6 +200,31 @@ export function registerAdminModerationRoutes(app: Express, ctx: RouteContext) {
     } catch (error) {
       logger.error('Failed to get models:', error);
       res.status(500).json({ error: 'Failed to fetch models' });
+    }
+  });
+
+  // Admin update model — allows admins to set loraCategory and other model fields
+  app.patch('/api/admin/models/:id', requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { loraCategory } = req.body;
+
+      // Validate loraCategory if provided
+      if (loraCategory !== undefined && loraCategory !== null && loraCategory !== 'character' && loraCategory !== 'style') {
+        return res.status(400).json({ error: 'loraCategory must be "character", "style", or null' });
+      }
+
+      const updated = await storage.updateModel(id, { loraCategory: loraCategory ?? null });
+      if (!updated) {
+        return res.status(404).json({ error: 'Model not found' });
+      }
+      // Bust the 12-hour server-side model cache so the change is visible immediately
+      responseCache.invalidate('/api/models');
+      responseCache.invalidate('/api/models/popular');
+      res.json(updated);
+    } catch (error) {
+      logger.error('Failed to update model:', error);
+      res.status(500).json({ error: 'Failed to update model' });
     }
   });
 
