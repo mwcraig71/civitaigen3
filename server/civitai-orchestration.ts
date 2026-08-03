@@ -903,8 +903,20 @@ export class CivitAIOrchestrationService {
       });
     }
 
-    // If terminal-failed with no media, log the CivitAI error reason and emit
-    // a `scheduled:false, result:[]` shape so the poller stops immediately.
+    // If terminal-failed, log the CivitAI error reason and decide whether to
+    // salvage any images that were produced before the failure.
+    //
+    // Background: Krea 2 FAL (and possibly other FAL-backed models) occasionally
+    // reports step.status = "failed" with NO error detail while step.output.images
+    // contains a fully-generated image (1024×1024, previewUrl populated). This
+    // happens for transient infra / rate-limit failures where FAL completed the
+    // generation but couldn't finalise the job. Salvaging these images lets the
+    // user get a result instead of seeing a silent error.
+    //
+    // We do NOT salvage when:
+    //  • The error reason mentions a content-policy block (no deliverable image)
+    //  • The step status is "expired" or "canceled" (user-initiated or timed out)
+    //  • No images were collected (nothing to salvage)
     if (stepStatus === "failed" || stepStatus === "expired" || stepStatus === "canceled") {
       const errReason =
         step.error ||
@@ -914,11 +926,36 @@ export class CivitAIOrchestrationService {
         wf.failureReason ||
         wf.errorMessage ||
         step.output?.error ||
-        "(no error detail in step/wf fields)";
+        null;
+
+      // Salvage: failed step with output images and no known content block.
+      // Only attempt on "failed" (not expired/canceled) to avoid delivering
+      // half-finished or user-aborted jobs.
+      const salvagableImages = media.filter(m => m.mediaType === "image" && m.url);
+      const isContentBlock = errReason != null &&
+        /violate|blocked|content.policy|prohibited|not.allowed|nsfw|adult|explicit/i.test(errReason);
+      if (stepStatus === "failed" && salvagableImages.length > 0 && !isContentBlock) {
+        logger.warn(
+          `⚠️ CivitAI workflow ${workflowId.substring(0, 20)} status=failed but produced ` +
+          `${salvagableImages.length} image(s) — salvaging (errReason=${errReason ?? "none"})`
+        );
+        return {
+          token: workflowId,
+          jobs: [{
+            jobId: workflowId,
+            cost: wf.cost || 0,
+            result: salvagableImages,
+            scheduled: false,
+            stepStatus,
+          }],
+        };
+      }
+
       // Log the full step body to aid diagnosis (trim very long blobs).
       const stepSnapshot = JSON.stringify(step).slice(0, 800);
       logger.error(
-        `❌ CivitAI workflow ${workflowId.substring(0, 20)} ${stepStatus}: ${errReason} | step=${stepSnapshot}`
+        `❌ CivitAI workflow ${workflowId.substring(0, 20)} ${stepStatus}: ` +
+        `${errReason ?? "(no error detail in step/wf fields)"} | step=${stepSnapshot}`
       );
       // Omit `result` (not just empty-array it) — the BatchPoller's terminal-
       // failure detector checks `!jobs[0].result`, so an empty array would
