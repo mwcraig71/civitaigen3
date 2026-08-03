@@ -875,12 +875,18 @@ export class CivitAIOrchestrationService {
     // has produced them — the signed `url` IS the ready blob. The legacy v1
     // `available` boolean is not present, so URL presence is the readiness
     // signal. Only treat as unavailable if the upstream explicitly says so.
+    //
+    // NOTE: Krea 2 FAL (engine:"fal", model:"krea2") returns images with
+    // `previewUrl` instead of `url` — confirmed via production logs. The same
+    // pattern may apply to other FAL-backed models. Always prefer `url` but
+    // fall back to `previewUrl` so these images aren't silently dropped.
     for (const img of outImages) {
+      const imgUrl = img.url || img.previewUrl;
       media.push({
-        blobKey: img.id || img.blobKey || img.url,
-        blobUrl: img.url,
-        url: img.url,
-        available: !!img.url && img.available !== false,
+        blobKey: img.id || img.blobKey || imgUrl,
+        blobUrl: imgUrl,
+        url: imgUrl,
+        available: !!imgUrl && img.available !== false,
         seed: img.seed,
         mediaType: "image" as const,
       });
