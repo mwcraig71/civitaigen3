@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { logger } from "./logger";
+import { db, pool } from "./db";
 
 const app = express();
 
@@ -120,6 +121,17 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Apply any schema columns that may be missing in production.
+  // Uses IF NOT EXISTS so it is always safe to run on startup.
+  try {
+    logger.info("Checking database schema...");
+    await pool.query(`ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "lora_category" text`);
+    logger.info("Database schema check complete.");
+  } catch (err) {
+    logger.error("Database schema check failed:", err);
+    process.exit(1);
+  }
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
