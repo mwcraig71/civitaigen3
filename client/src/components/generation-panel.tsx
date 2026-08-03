@@ -677,7 +677,24 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
           form.setValue('modelId', selectedCharacter.baseModel);
           localStorage.setItem('generationPanel_modelId', JSON.stringify(selectedCharacter.baseModel));
         }
-        
+
+        // Re-apply character LoRAs using the fresh DB version of the character.
+        // This ensures the LoRA is always set correctly even if localStorage was
+        // cleared (e.g. by clearCorruptedLoRAs) or the character was updated.
+        const freshLoras = characterExists.loras ?? [];
+        if (freshLoras.length > 0) {
+          const currentLoras = form.getValues('loras') ?? [];
+          // Only override if the character's LoRAs aren't already present in the form
+          const allPresent = freshLoras.every((l: { id: string }) =>
+            currentLoras.some((cl: { id: string }) => cl.id === l.id)
+          );
+          if (!allPresent) {
+            console.log(`🎭 Re-applying ${freshLoras.length} LoRA(s) from character "${characterExists.name}"`);
+            form.setValue('loras', freshLoras);
+            localStorage.setItem('generationPanel_loras', JSON.stringify(freshLoras));
+          }
+        }
+
         // Update the prompt with current age from localStorage if this character was just loaded
         const currentPrompt = form.getValues('prompt') || '';
         if (currentPrompt.includes(selectedCharacter.basePrompt)) {
