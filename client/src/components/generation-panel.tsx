@@ -3031,6 +3031,21 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                 />
               )}
 
+              {/* Comfy-mode hint — shown when base Krea 2 (not Turbo) has LoRAs active.
+                  The server silently switches to the comfy engine in this case, which
+                  changes the available controls (steps/CFG instead of aspect ratio/creativity).
+                  This note makes that routing decision visible to the user. */}
+              {selectedModelFamily === 'krea2' &&
+                !selectedModelBaseModel.toLowerCase().includes('turbo') &&
+                (form.watch('loras') ?? []).length > 0 && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
+                    <span className="mt-0.5 shrink-0">⚡</span>
+                    <span>
+                      LoRAs enabled — using <strong>comfy engine</strong>. Steps &amp; CFG are now active; aspect ratio &amp; creativity controls are paused until LoRAs are removed.
+                    </span>
+                  </div>
+                )}
+
               {/* Advanced Settings Toggle */}
               <Button
                 type="button"
