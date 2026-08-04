@@ -32,6 +32,7 @@ const TOOLS_NAV = [
   { href: '/transform', label: 'Transform Studio', testId: 'nav-transform' },
   { href: '/characters', label: 'Characters', testId: 'nav-characters' },
   { href: '/scene-builder', label: 'Scene Builder', testId: 'nav-scene' },
+  { href: '/yearbook', label: 'Yearbook', testId: 'nav-yearbook' },
   { href: '/events', label: 'Events', testId: 'nav-events' },
   { href: '/saved-prompts', label: 'Saved Prompts', testId: 'nav-prompts' },
   { href: '/models', label: 'Models', testId: 'nav-models' },

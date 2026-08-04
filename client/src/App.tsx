@@ -38,6 +38,7 @@ const Feedback = lazy(() => import("@/pages/feedback"));
 const SavedPrompts = lazy(() => import("@/pages/saved-prompts"));
 const PromptCreator = lazy(() => import("@/pages/prompt-creator"));
 const Transform = lazy(() => import("@/pages/transform"));
+const Yearbook = lazy(() => import("@/pages/yearbook"));
 const Terms = lazy(() => import("@/pages/terms"));
 const ThankYou = lazy(() => import("@/pages/thank-you"));
 const Landing = lazy(() => import("@/pages/landing"));
@@ -264,6 +265,7 @@ function Router() {
             <Route path="/saved-prompts" component={SavedPrompts} />
             <Route path="/prompt-creator" component={PromptCreator} />
             <Route path="/transform" component={Transform} />
+            <Route path="/yearbook" component={Yearbook} />
           </>
         )}
         <Route path="*" component={NotFound} />
