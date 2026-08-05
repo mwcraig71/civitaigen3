@@ -161,7 +161,15 @@ export default function Yearbook() {
 
   // ── UI state ─────────────────────────────────────────────────────────────
 
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('yearbook_selected_ids');
+      if (!saved) return new Set<string>();
+      return new Set<string>(JSON.parse(saved));
+    } catch {
+      return new Set<string>();
+    }
+  });
   const [search, setSearch] = useState('');
   const [prompt, setPrompt] = useState<string>(() => {
     try {
@@ -337,6 +345,25 @@ export default function Yearbook() {
   const [saveAsTarget, setSaveAsTarget] = useState<YearbookResult | null>(null);
   const [saveAsName, setSaveAsName] = useState('');
   const [isSavingChar, setIsSavingChar] = useState(false);
+
+  // Persist selected character IDs whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem('yearbook_selected_ids', JSON.stringify(Array.from(selectedIds)));
+    } catch { /* ignore */ }
+  }, [selectedIds]);
+
+  // Drop stale IDs once characterLoras have loaded (removes IDs for deleted LoRAs)
+  useEffect(() => {
+    if (modelsLoading || characterLoras.length === 0) return;
+    const validIds = new Set(characterLoras.map((l) => l.id));
+    setSelectedIds((prev) => {
+      const pruned = new Set<string>([...prev].filter((id) => validIds.has(id)));
+      if (pruned.size === prev.size) return prev; // no change — skip re-render
+      return pruned;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelsLoading, characterLoras]); // run when the list first loads or updates
 
   // Persist prompt whenever it changes
   useEffect(() => {
