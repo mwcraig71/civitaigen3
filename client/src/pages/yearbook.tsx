@@ -112,7 +112,7 @@ export default function Yearbook() {
   // ── Batch run state ───────────────────────────────────────────────────────
 
   const [isRunning, setIsRunning] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(-1);
+  const [submittedCount, setSubmittedCount] = useState(0); // POSTs completed
   const [results, setResults] = useState<YearbookResult[]>(() => {
     try {
       const saved = localStorage.getItem('yearbook_results');
@@ -130,18 +130,17 @@ export default function Yearbook() {
   });
   const cancelRef = useRef(false);
 
-  // Persist results whenever they change (skip during an active run to avoid
-  // thrashing storage on every card update — we flush once the run finishes)
+  // Persist results whenever they change (skip during active run — flushed on completion)
   const isRunningRef = useRef(false);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
   useEffect(() => {
-    if (isRunningRef.current) return; // flush handled by runYearbook on completion
+    if (isRunningRef.current) return;
     try { localStorage.setItem('yearbook_results', JSON.stringify(results)); } catch { /* ignore */ }
   }, [results]);
 
-  // Refs for bridging async generation loop ↔ WebSocket/poll
-  const pendingGenIdRef = useRef<string | null>(null);
-  const resolveGenRef = useRef<((r: { imageUrl?: string; error?: string }) => void) | null>(null);
+  // Map of generationId → resolver for concurrent in-flight generations
+  type GenResolver = (r: { imageUrl?: string; error?: string }) => void;
+  const pendingGensRef = useRef<Map<string, GenResolver>>(new Map());
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
 
@@ -154,34 +153,21 @@ export default function Yearbook() {
     setMessageQueue([]);
 
     for (const msg of toProcess) {
-      if (!pendingGenIdRef.current || !resolveGenRef.current) continue;
+      // Find a pending generation matching any ID field on the message
+      const matchId = ([msg.generationId, msg.batchId, msg.imageId] as (string | undefined)[]).find(
+        (id): id is string => !!id && pendingGensRef.current.has(id)
+      );
+      if (!matchId) continue;
 
-      const matches =
-        msg.generationId === pendingGenIdRef.current ||
-        msg.batchId === pendingGenIdRef.current ||
-        msg.imageId === pendingGenIdRef.current;
-
-      if (!matches) continue;
+      const resolve = pendingGensRef.current.get(matchId);
+      if (!resolve) continue;
 
       if (msg.type === 'generation_image_ready' && msg.imageUrl) {
-        const resolve = resolveGenRef.current;
-        pendingGenIdRef.current = null;
-        resolveGenRef.current = null;
+        pendingGensRef.current.delete(matchId);
         resolve({ imageUrl: msg.imageUrl });
-        break;
-      }
-
-      if (msg.type === 'generation_batch_complete') {
-        // batch finished — if we haven't resolved via image_ready, poll once
-        break;
-      }
-
-      if (msg.type === 'error') {
-        const resolve = resolveGenRef.current;
-        pendingGenIdRef.current = null;
-        resolveGenRef.current = null;
+      } else if (msg.type === 'error') {
+        pendingGensRef.current.delete(matchId);
         resolve({ error: (msg as any).error || msg.message || 'Generation failed' });
-        break;
       }
     }
   }, [messageQueue, setMessageQueue]);
@@ -191,12 +177,24 @@ export default function Yearbook() {
   const waitForGeneration = useCallback(
     (generationId: string): Promise<{ imageUrl?: string; error?: string }> => {
       return new Promise((resolve) => {
-        pendingGenIdRef.current = generationId;
-        resolveGenRef.current = resolve;
+        let settled = false;
+        let pollInterval: ReturnType<typeof setInterval>;
+        let timeout: ReturnType<typeof setTimeout>;
+
+        const settle = (r: { imageUrl?: string; error?: string }) => {
+          if (settled) return;
+          settled = true;
+          clearInterval(pollInterval);
+          clearTimeout(timeout);
+          pendingGensRef.current.delete(generationId);
+          resolve(r);
+        };
+
+        pendingGensRef.current.set(generationId, settle);
 
         // HTTP polling fallback — fires every 6 s
-        const pollInterval = setInterval(async () => {
-          if (!pendingGenIdRef.current) {
+        pollInterval = setInterval(async () => {
+          if (!pendingGensRef.current.has(generationId)) {
             clearInterval(pollInterval);
             return;
           }
@@ -204,45 +202,20 @@ export default function Yearbook() {
             const res = await fetch(`/api/generations/${generationId}`);
             if (!res.ok) return;
             const gen: Generation & { message?: string } = await res.json();
-
             if (gen.status === 'completed' && gen.imageUrl) {
-              clearInterval(pollInterval);
-              if (pendingGenIdRef.current) {
-                pendingGenIdRef.current = null;
-                resolveGenRef.current = null;
-                resolve({ imageUrl: gen.imageUrl });
-              }
+              settle({ imageUrl: gen.imageUrl });
             } else if (gen.status === 'failed') {
-              clearInterval(pollInterval);
-              if (pendingGenIdRef.current) {
-                pendingGenIdRef.current = null;
-                resolveGenRef.current = null;
-                resolve({ error: 'Generation failed' });
-              }
+              settle({ error: 'Generation failed' });
             }
           } catch {
             // polling failed — keep trying
           }
         }, 6000);
 
-        // 35-minute hard timeout — matches the server's hard cap so we never
-        // give up before the server does (CivitAI queues can run 15-25 min).
-        const timeout = setTimeout(() => {
-          clearInterval(pollInterval);
-          if (pendingGenIdRef.current === generationId) {
-            pendingGenIdRef.current = null;
-            resolveGenRef.current = null;
-            resolve({ error: 'Generation timed out — CivitAI queue may be busy. Check your gallery for the result.' });
-          }
+        // 35-minute hard timeout — matches the server's hard cap
+        timeout = setTimeout(() => {
+          settle({ error: 'Generation timed out — CivitAI queue may be busy. Check your gallery for the result.' });
         }, 35 * 60 * 1000);
-
-        // Clean up timeout when resolved by WebSocket
-        const originalResolve = resolveGenRef.current;
-        resolveGenRef.current = (r) => {
-          clearTimeout(timeout);
-          clearInterval(pollInterval);
-          originalResolve?.(r);
-        };
       });
     },
     []
@@ -316,128 +289,172 @@ export default function Yearbook() {
 
     cancelRef.current = false;
     setIsRunning(true);
-    setCurrentIndex(0);
+    setSubmittedCount(0);
+
+    const chars = selectedCharacters;
 
     // Initialise all result slots as pending
     setResults(
-      selectedCharacters.map((lora) => ({
+      chars.map((lora) => ({
         loraId: lora.id,
         loraName: lora.name,
         loraImage: lora.imageUrl,
         triggerWords: lora.activationWords ?? [],
-        status: 'pending',
+        status: 'pending' as ResultStatus,
       }))
     );
 
-    let doneCount = 0;
+    // ── Phase 1: submit ALL characters concurrently ───────────────────────
+    // One promise per character; all POSTs fire at the same time.
+    // Each promise never rejects — errors are returned as { index, error }.
+    // Cards flip to "running" as each POST resolves.
 
-    for (let i = 0; i < selectedCharacters.length; i++) {
-      if (cancelRef.current) break;
+    type SubmitOutcome =
+      | { index: number; generationId: string }
+      | { index: number; error: string };
 
-      const lora = selectedCharacters[i];
-      setCurrentIndex(i);
+    const submitOutcomes = await Promise.allSettled(
+      chars.map(async (lora, i): Promise<SubmitOutcome> => {
+        try {
+          if (cancelRef.current) return { index: i, error: 'Cancelled' };
 
-      // Mark as running
-      setResults((prev) =>
-        prev.map((r, idx) => (idx === i ? { ...r, status: 'running', startedAt: Date.now() } : r))
-      );
+          const triggerWords = lora.activationWords ?? [];
+          const fullPrompt = triggerWords.length
+            ? `${prompt.trim()}, ${triggerWords.join(', ')}`
+            : prompt.trim();
 
-      // Build prompt: base + trigger words
-      const triggerWords = lora.activationWords ?? [];
-      const fullPrompt = triggerWords.length
-        ? `${prompt.trim()}, ${triggerWords.join(', ')}`
-        : prompt.trim();
+          const body = {
+            modelId: settings.modelId,
+            prompt: fullPrompt,
+            negativePrompt: settings.negativePrompt ?? '',
+            seed: settings.seed ?? -1,
+            seedIncrement: settings.seedIncrement ?? 3,
+            steps: settings.steps,
+            cfgScale: settings.cfgScale,
+            width: settings.width,
+            height: settings.height,
+            scheduler: settings.scheduler,
+            clipSkip: settings.clipSkip,
+            quantity: 1,
+            loras: [{ id: lora.id, strength: 1.0 }],
+            aspectRatio: settings.aspectRatio ?? '1:1',
+            creativity: settings.creativity ?? 'medium',
+          };
 
-      try {
-        const body = {
-          modelId: settings.modelId,
-          prompt: fullPrompt,
-          negativePrompt: settings.negativePrompt ?? '',
-          seed: settings.seed ?? -1,
-          seedIncrement: settings.seedIncrement ?? 3,
-          steps: settings.steps,
-          cfgScale: settings.cfgScale,
-          width: settings.width,
-          height: settings.height,
-          scheduler: settings.scheduler,
-          clipSkip: settings.clipSkip,
-          quantity: 1,
-          loras: [{ id: lora.id, strength: 1.0 }],
-          aspectRatio: settings.aspectRatio ?? '1:1',
-          creativity: settings.creativity ?? 'medium',
-        };
+          const res = await apiRequest('POST', '/api/generations', body);
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ message: 'Failed to start generation' }));
+            return { index: i, error: err.message || 'Failed to start generation' };
+          }
+          const generation: Generation & { message?: string } = await res.json();
+          if (!generation.id) return { index: i, error: generation.message || 'No generation ID returned' };
 
-        const res = await apiRequest('POST', '/api/generations', body);
+          // Flip card to running as soon as we have a generation ID
+          setResults((prev) =>
+            prev.map((r, idx) => idx === i ? { ...r, status: 'running', startedAt: Date.now() } : r)
+          );
+          setSubmittedCount((c) => c + 1);
+          return { index: i, generationId: generation.id };
+        } catch (err: any) {
+          return { index: i, error: err.message ?? 'Failed to submit' };
+        }
+      })
+    );
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ message: 'Failed to start generation' }));
-          throw new Error(err.message || 'Failed to start generation');
+    // Apply submission failures and collect successful IDs
+    type Submitted = { index: number; generationId: string };
+    const submitted: Submitted[] = [];
+
+    for (const outcome of submitOutcomes) {
+      // Promises never reject (errors are returned), but allSettled handles both
+      const val = outcome.status === 'fulfilled' ? outcome.value : { index: -1, error: 'Unknown error' };
+      if ('generationId' in val) {
+        submitted.push(val as Submitted);
+      } else {
+        const { index, error } = val as { index: number; error: string };
+        if (index >= 0) {
+          setResults((prev) =>
+            prev.map((r, idx) =>
+              idx === index ? { ...r, status: 'failed', error } : r
+            )
+          );
+        }
+      }
+    }
+
+    // Any slot still in "pending" was never submitted (e.g. cancel fired before
+    // its promise started). Mark them as cancelled now.
+    setResults((prev) =>
+      prev.map((r) =>
+        r.status === 'pending' ? { ...r, status: 'failed', error: 'Cancelled' } : r
+      )
+    );
+
+    // ── Phase 2: collect image results concurrently ───────────────────────
+    // All in-flight generations are watched in parallel.
+    // Cards update individually as each image arrives.
+
+    await Promise.all(
+      submitted.map(async ({ index, generationId }) => {
+        if (cancelRef.current) {
+          setResults((prev) =>
+            prev.map((r, idx) =>
+              idx === index && r.status === 'running'
+                ? { ...r, status: 'failed', error: 'Cancelled' }
+                : r
+            )
+          );
+          return;
         }
 
-        const generation: Generation & { message?: string } = await res.json();
+        const result = await waitForGeneration(generationId);
 
-        if (!generation.id) {
-          throw new Error(generation.message || 'No generation ID returned');
-        }
-
-        // Wait for completion via WebSocket / HTTP polling
-        const result = await waitForGeneration(generation.id);
-
-        if (cancelRef.current) break;
-
-        doneCount++;
         setResults((prev) =>
           prev.map((r, idx) =>
-            idx === i
+            idx === index
               ? {
                   ...r,
                   status: result.error ? 'failed' : 'completed',
                   imageUrl: result.imageUrl,
-                  generationId: generation.id,
+                  generationId,
                   error: result.error,
                 }
               : r
           )
         );
-      } catch (err: any) {
-        if (cancelRef.current) break;
-        setResults((prev) =>
-          prev.map((r, idx) =>
-            idx === i
-              ? { ...r, status: 'failed', error: err.message ?? 'Generation failed' }
-              : r
-          )
-        );
-      }
-    }
+      })
+    );
 
     setIsRunning(false);
-    setCurrentIndex(-1);
+    setSubmittedCount(0);
 
-    // Flush final results to localStorage now that the run is done
+    // Flush final results to localStorage and show toast using the settled state
     setResults((prev) => {
       try { localStorage.setItem('yearbook_results', JSON.stringify(prev)); } catch { /* ignore */ }
+      if (!cancelRef.current) {
+        const done = prev.filter((r) => r.status === 'completed').length;
+        const failed = prev.filter((r) => r.status === 'failed').length;
+        toast({
+          title: '🎓 Yearbook complete!',
+          description:
+            failed > 0
+              ? `${done} generated, ${failed} failed.`
+              : `${done} character image${done !== 1 ? 's' : ''} generated.`,
+        });
+      }
       return prev;
     });
-
-    if (!cancelRef.current) {
-      const failed = results.filter((r) => r.status === 'failed').length;
-      toast({
-        title: '🎓 Yearbook complete!',
-        description:
-          failed > 0
-            ? `${doneCount} generated, ${failed} failed.`
-            : `${doneCount} character image${doneCount !== 1 ? 's' : ''} generated.`,
-      });
-    }
   };
 
   const cancelRun = () => {
     cancelRef.current = true;
-    pendingGenIdRef.current = null;
-    resolveGenRef.current = null;
+    // Immediately settle all pending generation watchers so their promises resolve
+    for (const [, resolve] of pendingGensRef.current) {
+      resolve({ error: 'Cancelled' });
+    }
+    pendingGensRef.current.clear();
     setIsRunning(false);
-    setCurrentIndex(-1);
+    setSubmittedCount(0);
     toast({ title: 'Yearbook cancelled' });
   };
 
@@ -446,6 +463,7 @@ export default function Yearbook() {
   const completedCount = results.filter((r) => r.status === 'completed').length;
   const failedCount = results.filter((r) => r.status === 'failed').length;
   const totalResults = results.length;
+  const allSubmitted = submittedCount >= totalResults && totalResults > 0;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -666,10 +684,11 @@ export default function Yearbook() {
                         Cancel
                       </Button>
                       <span className="text-sm text-slate-400">
-                        {currentIndex + 1} / {totalResults} — generating{' '}
-                        <span className="text-white font-medium">
-                          {results[currentIndex]?.loraName ?? '…'}
-                        </span>
+                        {!allSubmitted ? (
+                          <>Submitting <span className="text-white font-medium">{submittedCount} / {totalResults}</span>…</>
+                        ) : (
+                          <><span className="text-white font-medium">{completedCount} / {totalResults}</span> complete</>
+                        )}
                       </span>
                     </>
                   ) : (
