@@ -130,6 +130,33 @@ export default function Yearbook() {
   });
   const cancelRef = useRef(false);
 
+  // On mount: recover any cards that were interrupted mid-run (page reload).
+  // If a card has a generationId stored, check the API — if it already completed
+  // on the server, restore it as completed rather than leaving it as failed.
+  useEffect(() => {
+    const toCheck = results.filter(
+      (r) => r.status === 'failed' && r.error === 'Interrupted — page was reloaded' && r.generationId
+    );
+    if (!toCheck.length) return;
+    toCheck.forEach(async (r) => {
+      try {
+        const res = await fetch(`/api/generations/${r.generationId}`);
+        if (!res.ok) return;
+        const gen: Generation & { message?: string } = await res.json();
+        if (gen.status === 'completed' && gen.imageUrl) {
+          setResults((prev) =>
+            prev.map((card) =>
+              card.generationId === r.generationId
+                ? { ...card, status: 'completed', imageUrl: gen.imageUrl, error: undefined }
+                : card
+            )
+          );
+        }
+      } catch { /* ignore — card stays failed */ }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only on mount
+
   // Persist results whenever they change (skip during active run — flushed on completion)
   const isRunningRef = useRef(false);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -192,7 +219,21 @@ export default function Yearbook() {
 
         pendingGensRef.current.set(generationId, settle);
 
-        // HTTP polling fallback — fires every 6 s
+        // Poll immediately in case the result arrived during phase 1 (before
+        // this watcher was registered) and the WebSocket message was dropped.
+        const pollOnce = async () => {
+          if (!pendingGensRef.current.has(generationId)) return;
+          try {
+            const res = await fetch(`/api/generations/${generationId}`);
+            if (!res.ok) return;
+            const gen: Generation & { message?: string } = await res.json();
+            if (gen.status === 'completed' && gen.imageUrl) settle({ imageUrl: gen.imageUrl });
+            else if (gen.status === 'failed') settle({ error: 'Generation failed' });
+          } catch { /* ignore */ }
+        };
+        pollOnce();
+
+        // HTTP polling fallback — fires every 6 s thereafter
         pollInterval = setInterval(async () => {
           if (!pendingGensRef.current.has(generationId)) {
             clearInterval(pollInterval);
@@ -349,9 +390,12 @@ export default function Yearbook() {
           const generation: Generation & { message?: string } = await res.json();
           if (!generation.id) return { index: i, error: generation.message || 'No generation ID returned' };
 
-          // Flip card to running as soon as we have a generation ID
+          // Flip card to running and store the generationId so page-reload
+          // recovery can check the API for this card even before it completes.
           setResults((prev) =>
-            prev.map((r, idx) => idx === i ? { ...r, status: 'running', startedAt: Date.now() } : r)
+            prev.map((r, idx) =>
+              idx === i ? { ...r, status: 'running', startedAt: Date.now(), generationId: generation.id } : r
+            )
           );
           setSubmittedCount((c) => c + 1);
           return { index: i, generationId: generation.id };
