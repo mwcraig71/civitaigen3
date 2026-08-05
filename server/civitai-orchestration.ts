@@ -935,16 +935,33 @@ export class CivitAIOrchestrationService {
       const isContentBlock = errReason != null &&
         /violate|blocked|content.policy|prohibited|not.allowed|nsfw|adult|explicit/i.test(errReason);
       if (stepStatus === "failed" && salvagableImages.length > 0 && !isContentBlock) {
+        // Log per-image URL origin to aid TTL/availability diagnosis.
+        // Krea 2 FAL images come back with previewUrl instead of url;
+        // both are blob CDN URLs but knowing which field was used helps
+        // identify if TTL-related 404s start appearing in downloads.
+        for (const img of outImages) {
+          const origin = img.url ? "url" : img.previewUrl ? "previewUrl" : "none";
+          logger.warn(
+            `⚠️ Salvageable image: origin=${origin} url=${(img.url || img.previewUrl || "").substring(0, 80)}`
+          );
+        }
         logger.warn(
           `⚠️ CivitAI workflow ${workflowId.substring(0, 20)} status=failed but produced ` +
           `${salvagableImages.length} image(s) — salvaging (errReason=${errReason ?? "none"})`
         );
+        // Force available:true on every salvaged image. The salvage path has already
+        // confirmed m.url is populated (the filter above). CivitAI's v2 API permanently
+        // returns available:false on FAL blobs even when their URLs are live; if we pass
+        // through that flag, the BatchPoller's isResultReady check will be false for every
+        // salvaged image and — because scheduled:false — the 30-second dead-output timer
+        // will fire before the every-10-attempts HEAD probe can override it, causing the
+        // salvaged image to be silently discarded instead of downloaded and stored.
         return {
           token: workflowId,
           jobs: [{
             jobId: workflowId,
             cost: wf.cost || 0,
-            result: salvagableImages,
+            result: salvagableImages.map(m => ({ ...m, available: true })),
             scheduled: false,
             stepStatus,
           }],

@@ -1286,8 +1286,15 @@ function friendlyGenerationError(raw: string): string {
             let availableBlobs = job.result.filter(isResultReady).length;
 
             // HEAD probe: when no blobs are flagged available but URLs are present,
-            // verify the URL is actually reachable every ~10 attempts.
-            if (availableBlobs === 0 && pollerInfo.attempts % 10 === 1) {
+            // verify the URL is actually reachable. Run every ~10 attempts for
+            // in-progress jobs (scheduled:true) to avoid hammering the CDN, but
+            // run on EVERY poll for terminal jobs (scheduled:false) so a salvaged
+            // Krea 2 previewUrl blob (available:false, scheduled:false) is confirmed
+            // immediately instead of racing the 30-second dead-output window.
+            const shouldProbe = availableBlobs === 0 && (
+              !job.scheduled || pollerInfo.attempts % 10 === 1
+            );
+            if (shouldProbe) {
               const firstWithUrl = job.result.find((r: any) => r.blobUrl || r.url);
               const probeUrl = firstWithUrl?.blobUrl || firstWithUrl?.url;
               if (probeUrl) {
