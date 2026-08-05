@@ -293,6 +293,39 @@ export function registerAdminTrackingRoutes(app: Express, ctx: RouteContext) {
     }
   });
 
+  // ── Model Performance History ─────────────────────────────────────────────
+  // Returns daily median total time, queue time, and generate time for a
+  // specific model over the last 7 days (pure SQL aggregation, no new columns).
+  app.get('/api/admin/model-performance/:modelId/history', requireAdmin, async (req, res) => {
+    try {
+      const { modelId } = req.params;
+      const { days } = req.query;
+      const numDays = Math.min(Math.max(parseInt(String(days ?? "7"), 10) || 7, 1), 30);
+
+      const rows = await db.execute(sql`
+        SELECT
+          DATE(g.created_at AT TIME ZONE 'UTC')                                         AS "date",
+          COUNT(*)::int                                                                  AS "count",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY g.queue_ms))::int           AS "medianQueueMs",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY g.generate_ms))::int        AS "medianGenerateMs",
+          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (
+            ORDER BY COALESCE(g.queue_ms, 0) + COALESCE(g.generate_ms, 0)
+          ))::int                                                                        AS "medianTotalMs"
+        FROM generations g
+        WHERE g.model_id = ${modelId}
+          AND g.queue_ms IS NOT NULL
+          AND g.created_at >= NOW() - (${numDays} || ' days')::interval
+        GROUP BY DATE(g.created_at AT TIME ZONE 'UTC')
+        ORDER BY "date" ASC
+      `);
+
+      res.json({ modelId, days: numDays, history: rows.rows });
+    } catch (error) {
+      logger.error('Failed to fetch model performance history:', error);
+      res.status(500).json({ error: 'Failed to fetch model performance history' });
+    }
+  });
+
   // Record tracking event (called by client when user is being tracked)
   app.post('/api/tracking/event', isAuthenticated, async (req, res) => {
     try {

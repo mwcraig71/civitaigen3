@@ -12,6 +12,9 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import type { Model } from "@shared/schema";
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine,
+} from "recharts";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +30,20 @@ interface ModelPerf {
   medianGenerateMs: number | null;
   medianTotalMs: number | null;
   p90TotalMs: number | null;
+}
+
+interface HistoryPoint {
+  date: string;
+  count: number;
+  medianQueueMs: number | null;
+  medianGenerateMs: number | null;
+  medianTotalMs: number | null;
+}
+
+interface ModelHistory {
+  modelId: string;
+  days: number;
+  history: HistoryPoint[];
 }
 
 type SortField = keyof ModelPerf;
@@ -98,6 +115,167 @@ function benchmarkParams(model: Model) {
   };
 }
 
+// ── History Detail Row ────────────────────────────────────────────────────────
+
+function HistoryDetailRow({ modelId, colSpan }: { modelId: string; colSpan: number }) {
+  const [historyDays, setHistoryDays] = useState<string>("7");
+
+  const { data, isLoading, isError } = useQuery<ModelHistory>({
+    queryKey: [`/api/admin/model-performance/${modelId}/history`, historyDays],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/admin/model-performance/${modelId}/history?days=${historyDays}`,
+        { credentials: "include" }
+      );
+      if (!res.ok) throw new Error("Failed to fetch history");
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const history = data?.history ?? [];
+
+  // Tooltip formatter
+  const tooltipFormatter = (value: number | null, name: string) => {
+    if (value == null) return ["—", name];
+    const label =
+      name === "medianTotalMs" ? "Median Total" :
+      name === "medianQueueMs" ? "Median Queue" :
+      name === "medianGenerateMs" ? "Median Gen" : name;
+    return [fmtMs(value), label];
+  };
+
+  const tickFormatter = (ms: number) => {
+    if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`;
+    if (ms >= 1000) return `${(ms / 1000).toFixed(0)}s`;
+    return `${ms}ms`;
+  };
+
+  return (
+    <tr>
+      <td colSpan={colSpan} className="px-4 py-4 bg-muted/20 border-b border-border">
+        <div className="space-y-3">
+          {/* Controls */}
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Timing History
+            </span>
+            <Select value={historyDays} onValueChange={setHistoryDays}>
+              <SelectTrigger className="w-28 h-7 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7">Last 7 days</SelectItem>
+                <SelectItem value="14">Last 14 days</SelectItem>
+                <SelectItem value="30">Last 30 days</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Chart */}
+          {isLoading ? (
+            <div className="flex items-center justify-center h-28">
+              <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : isError ? (
+            <div className="flex items-center justify-center h-28 text-xs text-red-400">
+              Failed to load history data
+            </div>
+          ) : history.length === 0 ? (
+            <div className="flex items-center justify-center h-28 text-xs text-muted-foreground">
+              No timing data in the selected range
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={120}>
+              <LineChart data={history} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "rgba(255,255,255,0.4)" }}
+                  tickFormatter={(d: string) => {
+                    const dt = new Date(d);
+                    return `${dt.getMonth() + 1}/${dt.getDate()}`;
+                  }}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: "rgba(255,255,255,0.4)" }}
+                  tickFormatter={tickFormatter}
+                  tickLine={false}
+                  axisLine={false}
+                  width={36}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "hsl(var(--card))",
+                    border: "1px solid hsl(var(--border))",
+                    borderRadius: "6px",
+                    fontSize: "11px",
+                  }}
+                  labelStyle={{ color: "rgba(255,255,255,0.7)", marginBottom: 4 }}
+                  labelFormatter={(d: string) => new Date(d).toLocaleDateString()}
+                  formatter={tooltipFormatter as any}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="medianTotalMs"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  dot={{ r: 3, fill: "#f59e0b", strokeWidth: 0 }}
+                  activeDot={{ r: 4 }}
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="medianQueueMs"
+                  stroke="#38bdf8"
+                  strokeWidth={1.5}
+                  dot={false}
+                  strokeDasharray="4 2"
+                  connectNulls
+                />
+                <Line
+                  type="monotone"
+                  dataKey="medianGenerateMs"
+                  stroke="#a78bfa"
+                  strokeWidth={1.5}
+                  dot={false}
+                  strokeDasharray="4 2"
+                  connectNulls
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+
+          {/* Legend */}
+          {!isLoading && !isError && history.length > 0 && (
+            <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 bg-amber-400" />
+                Median Total
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 bg-sky-400 border-dashed" style={{ borderTop: "1.5px dashed" }} />
+                Median Queue
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 bg-violet-400" style={{ borderTop: "1.5px dashed" }} />
+                Median Gen
+              </span>
+              {history.length > 0 && (
+                <span className="ml-auto">
+                  {history.reduce((s, p) => s + (p.count ?? 0), 0)} timed runs in range
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function ModelPerformanceTab() {
@@ -107,6 +285,7 @@ export default function ModelPerformanceTab() {
   const [sortField, setSortField] = useState<SortField>("medianTotalMs");
   const [sortDir,   setSortDir]   = useState<SortDir>("asc");
   const [engineFilter, setEngineFilter] = useState<string>("all");
+  const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
 
   const { data: perfData, isLoading: perfLoading, refetch: refetchPerf } = useQuery<{ models: ModelPerf[] }>({
     queryKey: ["/api/admin/model-performance"],
@@ -266,6 +445,9 @@ export default function ModelPerformanceTab() {
 
   const hasBenchmarkResults = benchmarkJobs.length > 0;
 
+  // Total columns in leaderboard table (for colSpan)
+  const TABLE_COLS = 10; // #, Model, Engine, Median Queue, Median Gen, Median Total, P90 Total, 24h Runs, Total, Expand
+
   return (
     <div className="space-y-6">
       {/* ── Header ── */}
@@ -339,31 +521,48 @@ export default function ModelPerformanceTab() {
                     <th className="text-right px-4 py-2 font-medium cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("timedCount")}>
                       <span className="inline-flex items-center">Total<SortIcon field="timedCount" /></span>
                     </th>
+                    <th className="w-8" />
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((m, idx) => {
                     const eng = engineTag(m.baseModel);
+                    const isExpanded = expandedModelId === m.modelId;
                     return (
-                      <tr key={m.modelId} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
-                        <td className="px-4 py-2.5 text-muted-foreground">
-                          {idx === 0 ? <Trophy className="h-4 w-4 text-amber-400" /> : idx + 1}
-                        </td>
-                        <td className="px-4 py-2.5 font-medium max-w-[220px] truncate" title={m.modelName}>
-                          {m.modelName}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${ENGINE_COLORS[eng] ?? ENGINE_COLORS.sdcpp}`}>
-                            {eng}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right tabular-nums">{fmtMs(m.medianQueueMs)}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums">{fmtMs(m.medianGenerateMs)}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtMs(m.medianTotalMs)}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{fmtMs(m.p90TotalMs)}</td>
-                        <td className="px-4 py-2.5 text-right text-muted-foreground">{Number(m.count24h)}</td>
-                        <td className="px-4 py-2.5 text-right text-muted-foreground">{Number(m.timedCount)}</td>
-                      </tr>
+                      <>
+                        <tr
+                          key={m.modelId}
+                          className={`border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer ${isExpanded ? "bg-muted/20" : ""}`}
+                          onClick={() => setExpandedModelId(isExpanded ? null : m.modelId)}
+                        >
+                          <td className="px-4 py-2.5 text-muted-foreground">
+                            {idx === 0 ? <Trophy className="h-4 w-4 text-amber-400" /> : idx + 1}
+                          </td>
+                          <td className="px-4 py-2.5 font-medium max-w-[220px] truncate" title={m.modelName}>
+                            {m.modelName}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${ENGINE_COLORS[eng] ?? ENGINE_COLORS.sdcpp}`}>
+                              {eng}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{fmtMs(m.medianQueueMs)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">{fmtMs(m.medianGenerateMs)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtMs(m.medianTotalMs)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{fmtMs(m.p90TotalMs)}</td>
+                          <td className="px-4 py-2.5 text-right text-muted-foreground">{Number(m.count24h)}</td>
+                          <td className="px-4 py-2.5 text-right text-muted-foreground">{Number(m.timedCount)}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground">
+                            {isExpanded
+                              ? <ChevronUp className="h-3.5 w-3.5" />
+                              : <ChevronDown className="h-3.5 w-3.5" />
+                            }
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <HistoryDetailRow key={`${m.modelId}-history`} modelId={m.modelId} colSpan={TABLE_COLS} />
+                        )}
+                      </>
                     );
                   })}
                 </tbody>
