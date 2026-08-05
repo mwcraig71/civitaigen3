@@ -18,6 +18,13 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/use-websocket';
@@ -157,6 +164,9 @@ export default function Yearbook() {
     }
   });
   const [promptExpanded, setPromptExpanded] = useState(false);
+
+  // Generation settings panel (steps, CFG, negative prompt, etc.)
+  const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
 
   // Yearbook-specific seed — independent of the main panel.
   // Default -1 = random each run, which ensures fresh results even when
@@ -1169,6 +1179,168 @@ export default function Yearbook() {
                         {failedCount} failed
                       </span>
                     )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Generation Settings */}
+            <Card className="bg-dark-card border-dark-border">
+              <CardContent className="pt-4 pb-4 space-y-3">
+                <button
+                  type="button"
+                  className="flex items-center justify-between w-full"
+                  onClick={() => setSettingsPanelOpen((v) => !v)}
+                >
+                  <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
+                    <span className="text-slate-400">⚙</span>
+                    Generation Settings
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    {!settingsPanelOpen && (
+                      <span className="text-[10px] text-slate-500">
+                        {form.watch('steps')} steps · CFG {form.watch('cfgScale')} · {form.watch('scheduler')}
+                      </span>
+                    )}
+                    {settingsPanelOpen ? (
+                      <ChevronUp className="h-4 w-4 text-slate-500" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-slate-500" />
+                    )}
+                  </div>
+                </button>
+
+                {settingsPanelOpen && (
+                  <div className="space-y-4 pt-1">
+                    {/* Negative Prompt */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-slate-400">Negative Prompt</label>
+                      <Textarea
+                        value={form.watch('negativePrompt') ?? ''}
+                        onChange={(e) => form.setValue('negativePrompt', e.target.value)}
+                        placeholder="worst quality, low quality, blurry…"
+                        className="h-16 text-xs bg-dark-bg border-dark-border resize-none"
+                        disabled={isRunning}
+                      />
+                    </div>
+
+                    {/* Steps + CFG Scale */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400">Steps</label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={form.watch('steps') ?? 28}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v)) form.setValue('steps', Math.min(200, Math.max(1, v)));
+                          }}
+                          className="h-8 text-xs bg-dark-bg border-dark-border"
+                          disabled={isRunning}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400">CFG Scale</label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={30}
+                          step={0.5}
+                          value={form.watch('cfgScale') ?? 4.5}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            if (!isNaN(v)) form.setValue('cfgScale', Math.min(30, Math.max(1, v)));
+                          }}
+                          className="h-8 text-xs bg-dark-bg border-dark-border"
+                          disabled={isRunning}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Scheduler + Clip Skip */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400">Scheduler</label>
+                        <Select
+                          value={form.watch('scheduler') ?? 'Euler'}
+                          onValueChange={(v) => form.setValue('scheduler', v)}
+                          disabled={isRunning}
+                        >
+                          <SelectTrigger className="h-8 text-xs bg-dark-bg border-dark-border">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Euler">Euler</SelectItem>
+                            <SelectItem value="Euler a">Euler a</SelectItem>
+                            <SelectItem value="DPM++ 2M">DPM++ 2M</SelectItem>
+                            <SelectItem value="DPM++ 2M Karras">DPM++ 2M Karras</SelectItem>
+                            <SelectItem value="DPM++ 2M SDE">DPM++ 2M SDE</SelectItem>
+                            <SelectItem value="DPM++ 2M SDE Karras">DPM++ 2M SDE Karras</SelectItem>
+                            <SelectItem value="DPM++ SDE">DPM++ SDE</SelectItem>
+                            <SelectItem value="DPM++ SDE Karras">DPM++ SDE Karras</SelectItem>
+                            <SelectItem value="DPM++ 3M SDE">DPM++ 3M SDE</SelectItem>
+                            <SelectItem value="DPM2">DPM2</SelectItem>
+                            <SelectItem value="DPM2 a">DPM2 a</SelectItem>
+                            <SelectItem value="DPM2 Karras">DPM2 Karras</SelectItem>
+                            <SelectItem value="LCM">LCM</SelectItem>
+                            <SelectItem value="DDIM">DDIM</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400">Clip Skip</label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={12}
+                          value={form.watch('clipSkip') ?? 2}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v)) form.setValue('clipSkip', Math.min(12, Math.max(1, v)));
+                          }}
+                          className="h-8 text-xs bg-dark-bg border-dark-border"
+                          disabled={isRunning}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Width × Height */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400">Width</label>
+                        <Input
+                          type="number"
+                          min={64}
+                          max={2048}
+                          step={64}
+                          value={form.watch('width') ?? 832}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v)) form.setValue('width', v);
+                          }}
+                          className="h-8 text-xs bg-dark-bg border-dark-border"
+                          disabled={isRunning}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-slate-400">Height</label>
+                        <Input
+                          type="number"
+                          min={64}
+                          max={2048}
+                          step={64}
+                          value={form.watch('height') ?? 1216}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v)) form.setValue('height', v);
+                          }}
+                          className="h-8 text-xs bg-dark-bg border-dark-border"
+                          disabled={isRunning}
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
               </CardContent>
