@@ -113,8 +113,31 @@ export default function Yearbook() {
 
   const [isRunning, setIsRunning] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(-1);
-  const [results, setResults] = useState<YearbookResult[]>([]);
+  const [results, setResults] = useState<YearbookResult[]>(() => {
+    try {
+      const saved = localStorage.getItem('yearbook_results');
+      if (!saved) return [];
+      const parsed: YearbookResult[] = JSON.parse(saved);
+      // Any card that was mid-run when the page reloaded is marked as failed
+      return parsed.map((r) =>
+        r.status === 'running' || r.status === 'pending'
+          ? { ...r, status: 'failed', error: 'Interrupted — page was reloaded' }
+          : r
+      );
+    } catch {
+      return [];
+    }
+  });
   const cancelRef = useRef(false);
+
+  // Persist results whenever they change (skip during an active run to avoid
+  // thrashing storage on every card update — we flush once the run finishes)
+  const isRunningRef = useRef(false);
+  useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
+  useEffect(() => {
+    if (isRunningRef.current) return; // flush handled by runYearbook on completion
+    try { localStorage.setItem('yearbook_results', JSON.stringify(results)); } catch { /* ignore */ }
+  }, [results]);
 
   // Refs for bridging async generation loop ↔ WebSocket/poll
   const pendingGenIdRef = useRef<string | null>(null);
@@ -390,6 +413,12 @@ export default function Yearbook() {
 
     setIsRunning(false);
     setCurrentIndex(-1);
+
+    // Flush final results to localStorage now that the run is done
+    setResults((prev) => {
+      try { localStorage.setItem('yearbook_results', JSON.stringify(prev)); } catch { /* ignore */ }
+      return prev;
+    });
 
     if (!cancelRef.current) {
       const failed = results.filter((r) => r.status === 'failed').length;
