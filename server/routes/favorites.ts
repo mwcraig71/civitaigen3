@@ -187,6 +187,41 @@ export function registerFavoritesRoutes(app: Express, ctx: RouteContext) {
     }
   });
 
+  // LoRA Grouping endpoints — per-user character/style assignments synced across devices
+  app.get("/api/lora-grouping", async (req: any, res) => {
+    try {
+      if (!req.isAuthenticated?.() || !(req.user as any)?.claims?.sub) {
+        return res.json(null); // unauthenticated → fall back to localStorage
+      }
+      const userId = (req.user as any).claims.sub;
+      const grouping = await storage.getLoraGrouping(userId);
+      res.json(grouping);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch LoRA grouping" });
+    }
+  });
+
+  app.put("/api/lora-grouping", async (req: any, res) => {
+    try {
+      if (!req.isAuthenticated?.() || !(req.user as any)?.claims?.sub) {
+        return res.status(401).json({ message: "Authentication required" });
+      }
+      const userId = (req.user as any).claims.sub;
+      const schema = z.object({
+        charIds: z.array(z.string()),
+        styleOverrideIds: z.array(z.string()),
+      });
+      const { charIds, styleOverrideIds } = schema.parse(req.body);
+      const grouping = await storage.saveLoraGrouping(userId, charIds, styleOverrideIds);
+      res.json(grouping);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: "Invalid request data" });
+      }
+      res.status(500).json({ message: "Failed to save LoRA grouping" });
+    }
+  });
+
   // Setup default model favorites for all users (admin only)
   app.post("/api/setup-default-favorites", async (req: any, res) => {
     try {

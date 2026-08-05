@@ -29,6 +29,13 @@
       "when": 1785727530800,
       "tag": "0003_heavy_sersi",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785897568481,
+      "tag": "0004_lora_groupings",
+      "breakpoints": true
     }
   ]
 }

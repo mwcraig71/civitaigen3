@@ -1,10 +1,10 @@
-import { type User, type InsertUser, type UpsertUser, type Model, type InsertModel, type Generation, type InsertGeneration, type Favorite, type InsertFavorite, type Character, type InsertCharacter, type CharacterPreset, type InsertCharacterPreset, type QualityGroup, type InsertQualityGroup, type SceneData, type InsertSceneData, type SavedScene, type InsertSavedScene, type SavedPrompt, type InsertSavedPrompt, type SharedImage, type InsertSharedImage, type ModelLike, type SignupPromotion, type InsertSignupPromotion, type UserSignupBonus, type InsertUserSignupBonus, type ContentReport, type InsertContentReport, type ModerationAction, type InsertModerationAction, type CreditPackage, type InsertCreditPackage, type CreditTransaction, type InsertCreditTransaction, type PlatformSetting, type InsertPlatformSetting, type UserFeedback, type InsertUserFeedback, type Notification, type BannedEmail, type InsertBannedEmail, type UserSharedImageLike, type InsertUserSharedImageLike, type ErrorLog, type InsertErrorLog, type Event, type InsertEvent, type EventStep, type InsertEventStep, type FavoritePromptWord, type InsertFavoritePromptWord, type UserPreferences, type InsertUserPreferences, type SystemSettings, type InsertSystemSettings, type EnhancedImage, type InsertEnhancedImage, type TrackingSession, type InsertTrackingSession, type TrackingEvent, type InsertTrackingEvent, type SanitizationRule, type InsertSanitizationRule, type ApiKey, type InsertApiKey, type SourceUpload } from "@shared/schema";
+import { type User, type InsertUser, type UpsertUser, type Model, type InsertModel, type Generation, type InsertGeneration, type Favorite, type InsertFavorite, type Character, type InsertCharacter, type CharacterPreset, type InsertCharacterPreset, type QualityGroup, type InsertQualityGroup, type SceneData, type InsertSceneData, type SavedScene, type InsertSavedScene, type SavedPrompt, type InsertSavedPrompt, type SharedImage, type InsertSharedImage, type ModelLike, type SignupPromotion, type InsertSignupPromotion, type UserSignupBonus, type InsertUserSignupBonus, type ContentReport, type InsertContentReport, type ModerationAction, type InsertModerationAction, type CreditPackage, type InsertCreditPackage, type CreditTransaction, type InsertCreditTransaction, type PlatformSetting, type InsertPlatformSetting, type UserFeedback, type InsertUserFeedback, type Notification, type BannedEmail, type InsertBannedEmail, type UserSharedImageLike, type InsertUserSharedImageLike, type ErrorLog, type InsertErrorLog, type Event, type InsertEvent, type EventStep, type InsertEventStep, type FavoritePromptWord, type InsertFavoritePromptWord, type UserPreferences, type InsertUserPreferences, type SystemSettings, type InsertSystemSettings, type EnhancedImage, type InsertEnhancedImage, type TrackingSession, type InsertTrackingSession, type TrackingEvent, type InsertTrackingEvent, type SanitizationRule, type InsertSanitizationRule, type ApiKey, type InsertApiKey, type SourceUpload, type LoraGrouping } from "@shared/schema";
 import { logger } from "./logger";
 import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { db } from "./db";
 import { eq, desc, and, ilike, sql, ne, or, gte, lt, like, count, sum, isNull, isNotNull, inArray } from "drizzle-orm";
-import { users, models, generations, favorites, characters, characterPresets, qualityGroups, sceneData, savedScenes, savedPrompts, sharedImages, modelLikes, signupPromotions, userSignupBonuses, contentReports, moderationActions, creditPackages, creditTransactions, platformSettings, userFeedback, notifications, bannedEmails, userSharedImageLikes, errorLogs, events, eventSteps, favoritePromptWords, userPreferences, systemSettings, enhancedImages, trackingSessions, trackingEvents, sanitizationRules, apiKeys, sourceUploads } from "@shared/schema";
+import { users, models, generations, favorites, characters, characterPresets, qualityGroups, sceneData, savedScenes, savedPrompts, sharedImages, modelLikes, signupPromotions, userSignupBonuses, contentReports, moderationActions, creditPackages, creditTransactions, platformSettings, userFeedback, notifications, bannedEmails, userSharedImageLikes, errorLogs, events, eventSteps, favoritePromptWords, userPreferences, systemSettings, enhancedImages, trackingSessions, trackingEvents, sanitizationRules, apiKeys, sourceUploads, loraGroupings } from "@shared/schema";
 import { objectStorageClient, parseObjectPath } from "./objectStorage";
 import { evaluateClaim, effectiveStreak, rewardForStreak, generateReferralCode, REFERRAL_REWARD_REFERRER, REFERRAL_REWARD_INVITEE, REFERRAL_REDEEM_WINDOW_MS } from "./rewards";
 import { encryptApiKey, decryptApiKey, isLegacyCiphertext } from "./crypto";
@@ -93,6 +93,8 @@ export interface IStorage {
   addModelFavorite(userId: string, modelId: string): Promise<ModelLike>;
   removeModelFavorite(userId: string, modelId: string): Promise<void>;
   setupDefaultModelFavorites(): Promise<void>;
+  getLoraGrouping(userId: string): Promise<LoraGrouping | null>;
+  saveLoraGrouping(userId: string, charIds: string[], styleOverrideIds: string[]): Promise<LoraGrouping>;
 
   // Characters
   getCharacter(id: string): Promise<Character | undefined>;
@@ -1502,6 +1504,25 @@ export class DatabaseStorage implements IStorage {
         eq(modelLikes.userId, userId),
         eq(modelLikes.modelId, modelId)
       ));
+  }
+
+  // LoRA Grouping (per-user character/style assignments, synced across devices)
+  async getLoraGrouping(userId: string): Promise<LoraGrouping | null> {
+    const rows = await db.select().from(loraGroupings).where(eq(loraGroupings.userId, userId));
+    return rows[0] ?? null;
+  }
+
+  async saveLoraGrouping(userId: string, charIds: string[], styleOverrideIds: string[]): Promise<LoraGrouping> {
+    const now = new Date();
+    const rows = await db
+      .insert(loraGroupings)
+      .values({ userId, charIds, styleOverrideIds, updatedAt: now })
+      .onConflictDoUpdate({
+        target: loraGroupings.userId,
+        set: { charIds, styleOverrideIds, updatedAt: now },
+      })
+      .returning();
+    return rows[0];
   }
 
   async setupDefaultModelFavorites(): Promise<void> {

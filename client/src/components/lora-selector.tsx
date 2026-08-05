@@ -1,6 +1,7 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Plus, X, Heart, Search, SlidersHorizontal, Sparkles, User, ArrowUp, ArrowDown } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -38,23 +39,220 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
   const [tab, setTab] = useState<'favorites' | 'all'>('favorites');
   const [baseModelFilter, setBaseModelFilter] = useState<string>('all');
   const [selectedTriggerWords, setSelectedTriggerWords] = useState<Set<string>>(new Set());
-  // Local character-group set — initialised from prop + persisted user assignments
+
+  // Current authenticated user — scopes grouping cache and localStorage per account
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+
+  // Always-current ref; stable callbacks read from here rather than closing over userId
+  const currentUserIdRef = useRef(userId);
+  currentUserIdRef.current = userId;
+
+  // ── localStorage key helpers ───────────────────────────────────────────────
+  const lsCharKey  = userId ? `lora-char-ids-${userId}`          : 'lora-char-ids';
+  const lsStyleKey = userId ? `lora-style-overrides-${userId}`   : 'lora-style-overrides';
+  // Durable per-user migration marker — set once after copying legacy generic keys
+  const lsMigratedKey = userId ? `lora-migrated-${userId}` : null;
+
+  // ── Local state ───────────────────────────────────────────────────────────
+  // Seeded from generic keys on first mount; the userId-change effect reloads from the
+  // correct namespaced slot (and runs a one-time migration) on every identity change.
   const [localCharIds, setLocalCharIds] = useState<Set<string>>(() => {
     let saved: string[] = [];
     try { saved = JSON.parse(localStorage.getItem('lora-char-ids') ?? '[]'); } catch {}
     return new Set([...characterLoraIds, ...saved]);
   });
-  // Tracks IDs the user explicitly moved to Style — persisted so auto-detect doesn't re-override
   const userRemovedIds = useRef<Set<string>>((() => {
     try { return new Set<string>(JSON.parse(localStorage.getItem('lora-style-overrides') ?? '[]')); } catch { return new Set<string>(); }
   })());
+  // Sync guards
+  const serverApplied   = useRef(false);
+  const localEditsMade  = useRef(false);
+  // Write queue: abort + generation + debounce + in-flight serialization
+  const saveDebounceTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const writeGenerationRef = useRef(0);
+  const isWritingRef       = useRef(false);
+  const pendingWriteRef    = useRef<{ charIds: string[]; styleOverrideIds: string[]; generation: number } | null>(null);
 
-  // Persist character set whenever it changes
+  // ── Server query ──────────────────────────────────────────────────────────
+  // Query key includes userId for per-account cache isolation.
+  // Explicit queryFn always fetches /api/lora-grouping — the default fetcher joins
+  // key segments with "/" producing the wrong URL (/api/lora-grouping/<userId>).
+  const { data: serverGrouping } = useQuery<{ charIds: string[]; styleOverrideIds: string[] } | null>({
+    queryKey: ['/api/lora-grouping', userId],
+    enabled: userId !== null,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const res = await fetch('/api/lora-grouping', { credentials: 'include' });
+      if (res.status === 401) return null;
+      if (!res.ok) throw new Error(`LoRA grouping fetch failed: ${res.status}`);
+      return res.json() as Promise<{ charIds: string[]; styleOverrideIds: string[] } | null>;
+    },
+  });
+
+  // ── Serialized write queue ─────────────────────────────────────────────────
+  // Each write carries a generation number that must still match writeGenerationRef
+  // when the PUT fires and when the completion drains the pending queue.
+  // This prevents a completing write from a previous account from delivering the
+  // new account's queued payload under stale cookies.
+  // AbortController aborts the HTTP request immediately on account switch.
+  const fireServerSave = useCallback(async (charIds: string[], styleOverrideIds: string[], generation: number) => {
+    if (writeGenerationRef.current !== generation) return; // stale — discard
+    if (isWritingRef.current) {
+      pendingWriteRef.current = { charIds, styleOverrideIds, generation };
+      return;
+    }
+    isWritingRef.current = true;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    try {
+      if (writeGenerationRef.current !== generation) return; // recheck after sync gap
+      await fetch('/api/lora-grouping', {
+        method: 'PUT',
+        credentials: 'include',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ charIds, styleOverrideIds }),
+      });
+    } catch {
+      // AbortError: cancelled on account switch. Other errors: best-effort (localStorage is current).
+    } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
+      isWritingRef.current = false;
+      const pending = pendingWriteRef.current;
+      // Only drain if the generation still matches — prevents cross-account delivery
+      if (pending && pending.generation === writeGenerationRef.current) {
+        pendingWriteRef.current = null;
+        void fireServerSave(pending.charIds, pending.styleOverrideIds, pending.generation);
+      } else {
+        pendingWriteRef.current = null;
+      }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounce rapid UI interactions into a single PUT per burst.
+  // Captures the current generation at scheduling time so debounced writes
+  // are automatically invalidated if the account changes before they fire.
+  const scheduleServerSave = useCallback((charIds: string[], styleOverrideIds: string[]) => {
+    if (saveDebounceTimer.current) clearTimeout(saveDebounceTimer.current);
+    const gen = writeGenerationRef.current;
+    saveDebounceTimer.current = setTimeout(() => {
+      void fireServerSave(charIds, styleOverrideIds, gen);
+    }, 500);
+  }, [fireServerSave]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    if (saveDebounceTimer.current) clearTimeout(saveDebounceTimer.current);
+    abortControllerRef.current?.abort();
+  }, []);
+
+  // ── Full state reset on account switch ────────────────────────────────────
+  // 1. Abort the in-flight PUT immediately (its finally block handles isWritingRef).
+  // 2. Increment the write generation to invalidate all pending writes.
+  // 3. Clear queued state — the new account reconciles from a clean baseline.
+  // 4. Load the incoming user's namespaced localStorage slot.
+  //    One-time migration (guarded by a durable marker key): if the marker is absent,
+  //    copy legacy generic keys into the namespaced slot exactly once, then set the marker.
+  //    Subsequent empty states (e.g. after cache clear) are treated as genuinely empty
+  //    because the marker already exists.
   useEffect(() => {
-    try { localStorage.setItem('lora-char-ids', JSON.stringify([...localCharIds])); } catch {}
-  }, [localCharIds]);
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    if (saveDebounceTimer.current) {
+      clearTimeout(saveDebounceTimer.current);
+      saveDebounceTimer.current = null;
+    }
+    // Increment generation — any in-flight or pending write from the old account is now stale
+    writeGenerationRef.current += 1;
+    pendingWriteRef.current = null;
+    // isWritingRef: intentionally NOT reset here; the aborted PUT's finally sets it to false
+    serverApplied.current  = false;
+    localEditsMade.current = false;
 
-  // When a different character is selected, merge its LoRAs in (keep user's existing assignments)
+    const charKey   = userId ? `lora-char-ids-${userId}`        : 'lora-char-ids';
+    const styleKey  = userId ? `lora-style-overrides-${userId}` : 'lora-style-overrides';
+    const migrated  = lsMigratedKey ? localStorage.getItem(lsMigratedKey) : '1'; // unauthenticated → skip migration
+
+    let savedCharIds: string[] = [];
+    let savedStyleOverrides: string[] = [];
+    try { savedCharIds      = JSON.parse(localStorage.getItem(charKey)  ?? '[]'); } catch {}
+    try { savedStyleOverrides = JSON.parse(localStorage.getItem(styleKey) ?? '[]'); } catch {}
+
+    // One-time migration: copy legacy generic keys → namespaced slot (only if marker absent)
+    if (userId && !migrated) {
+      try { savedCharIds      = JSON.parse(localStorage.getItem('lora-char-ids')          ?? '[]'); } catch {}
+      try { savedStyleOverrides = JSON.parse(localStorage.getItem('lora-style-overrides') ?? '[]'); } catch {}
+      if (savedCharIds.length > 0 || savedStyleOverrides.length > 0) {
+        try { localStorage.setItem(charKey,  JSON.stringify(savedCharIds));      } catch {}
+        try { localStorage.setItem(styleKey, JSON.stringify(savedStyleOverrides)); } catch {}
+      }
+      // Set marker regardless of whether there was data, so this path never runs again
+      try { localStorage.setItem(lsMigratedKey!, '1'); } catch {}
+    }
+
+    userRemovedIds.current = new Set(savedStyleOverrides);
+    setLocalCharIds(new Set([...characterLoraIds, ...savedCharIds]));
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Stable helper: localStorage + debounced server write ──────────────────
+  const persistGrouping = useCallback((charIds: Set<string>, styleOverrides: Set<string>) => {
+    const uid       = currentUserIdRef.current;
+    const charKey   = uid ? `lora-char-ids-${uid}`        : 'lora-char-ids';
+    const styleKey  = uid ? `lora-style-overrides-${uid}` : 'lora-style-overrides';
+    localEditsMade.current = true;
+    try { localStorage.setItem(charKey,  JSON.stringify([...charIds]));      } catch {}
+    try { localStorage.setItem(styleKey, JSON.stringify([...styleOverrides])); } catch {}
+    scheduleServerSave([...charIds], [...styleOverrides]);
+  }, [scheduleServerSave]);
+
+  // ── Server reconciliation ─────────────────────────────────────────────────
+  // userId is included in deps so the effect re-runs when the identity changes,
+  // even when serverGrouping stays the same (e.g. cached null for the new account).
+  // Reads from localStorage directly for seed/push cases to avoid stale-closure issues.
+  // • undefined → query in flight; skip
+  // • null      → no server record; push this device's local state up as source of truth
+  // • object    → server wins unless local edits raced the query; otherwise push local up
+  useEffect(() => {
+    if (serverGrouping === undefined) return;
+    if (serverApplied.current) return;
+    serverApplied.current = true;
+
+    const uid      = currentUserIdRef.current;
+    const charKey  = uid ? `lora-char-ids-${uid}`        : 'lora-char-ids';
+    const styleKey = uid ? `lora-style-overrides-${uid}` : 'lora-style-overrides';
+    const gen      = writeGenerationRef.current;
+
+    if (serverGrouping === null || localEditsMade.current) {
+      // Seed server / push local wins — read fresh from localStorage to avoid stale closure
+      let charIds: string[] = [];
+      let styleOverrideIds: string[] = [];
+      try { charIds          = JSON.parse(localStorage.getItem(charKey)  ?? '[]'); } catch {}
+      try { styleOverrideIds = JSON.parse(localStorage.getItem(styleKey) ?? '[]'); } catch {}
+      if (serverGrouping === null && charIds.length === 0 && styleOverrideIds.length === 0) {
+        return; // Nothing to migrate
+      }
+      void fireServerSave(charIds, styleOverrideIds, gen);
+      return;
+    }
+
+    // Server wins — apply and persist to namespaced slot
+    userRemovedIds.current = new Set(serverGrouping.styleOverrideIds);
+    try { localStorage.setItem(styleKey, JSON.stringify(serverGrouping.styleOverrideIds)); } catch {}
+    setLocalCharIds(() => {
+      const next = new Set([...serverGrouping.charIds, ...characterLoraIds]);
+      try { localStorage.setItem(charKey, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }, [serverGrouping, fireServerSave, userId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist character set to namespaced localStorage key whenever it changes
+  useEffect(() => {
+    try { localStorage.setItem(lsCharKey, JSON.stringify([...localCharIds])); } catch {}
+  }, [localCharIds, lsCharKey]);
+
+  // When a different character is selected, merge its LoRAs in
   useEffect(() => {
     setLocalCharIds(prev => {
       const next = new Set(prev);
@@ -65,13 +263,20 @@ export default function LoRASelector({ selectedLoras, onLorasChange, onTriggerWo
 
   const moveToCharacter = (id: string) => {
     userRemovedIds.current.delete(id);
-    try { localStorage.setItem('lora-style-overrides', JSON.stringify([...userRemovedIds.current])); } catch {}
-    setLocalCharIds(prev => new Set([...prev, id]));
+    setLocalCharIds(prev => {
+      const next = new Set([...prev, id]);
+      persistGrouping(next, userRemovedIds.current);
+      return next;
+    });
   };
   const removeFromCharacter = (id: string) => {
     userRemovedIds.current.add(id);
-    try { localStorage.setItem('lora-style-overrides', JSON.stringify([...userRemovedIds.current])); } catch {}
-    setLocalCharIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+    setLocalCharIds(prev => {
+      const s = new Set(prev);
+      s.delete(id);
+      persistGrouping(s, userRemovedIds.current);
+      return s;
+    });
   };
 
   // Helper — returns true for LoRA names that are always character LoRAs

@@ -1351,3 +1351,16 @@ export const insertSourceUploadSchema = createInsertSchema(sourceUploads).omit({
 });
 export type SourceUpload = typeof sourceUploads.$inferSelect;
 export type InsertSourceUpload = z.infer<typeof insertSourceUploadSchema>;
+
+// Per-user LoRA grouping assignments (synced across devices)
+export const loraGroupings = pgTable("lora_groupings", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  // IDs the user has explicitly placed in the Character group
+  charIds: json("char_ids").$type<string[]>().notNull().default([]),
+  // IDs the user has explicitly moved to the Style group (overrides auto-detect)
+  styleOverrideIds: json("style_override_ids").$type<string[]>().notNull().default([]),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type LoraGrouping = typeof loraGroupings.$inferSelect;
+export type InsertLoraGrouping = typeof loraGroupings.$inferInsert;
