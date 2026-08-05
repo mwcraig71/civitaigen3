@@ -95,8 +95,19 @@ export default function Yearbook() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
-  const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
+  const [prompt, setPrompt] = useState<string>(() => {
+    try {
+      return localStorage.getItem('yearbook_prompt') || DEFAULT_PROMPT;
+    } catch {
+      return DEFAULT_PROMPT;
+    }
+  });
   const [promptExpanded, setPromptExpanded] = useState(false);
+
+  // Persist prompt whenever it changes
+  useEffect(() => {
+    try { localStorage.setItem('yearbook_prompt', prompt); } catch { /* ignore */ }
+  }, [prompt]);
 
   // ── Batch run state ───────────────────────────────────────────────────────
 
@@ -225,6 +236,17 @@ export default function Yearbook() {
         (l.activationWords ?? []).some((w) => w.toLowerCase().includes(q))
     );
   }, [characterLoras, search]);
+
+  // Group filtered LoRAs by baseModel, alphabetically by group label
+  const loraGroups = useMemo(() => {
+    const map = new Map<string, typeof filteredLoras>();
+    for (const lora of filteredLoras) {
+      const key = lora.baseModel?.trim() || 'Other';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(lora);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [filteredLoras]);
 
   const selectedCharacters = useMemo(
     () => characterLoras.filter((l) => selectedIds.has(l.id)),
@@ -493,57 +515,72 @@ export default function Yearbook() {
                   </div>
                 ) : (
                   <ScrollArea className="h-[420px]">
-                    <div className="space-y-1 pr-2">
-                      {filteredLoras.map((lora) => {
-                        const selected = selectedIds.has(lora.id);
-                        return (
-                          <button
-                            key={lora.id}
-                            type="button"
-                            onClick={() => toggleSelect(lora.id)}
-                            className={`flex items-center gap-2.5 w-full p-2 rounded-lg border text-left transition-colors ${
-                              selected
-                                ? 'bg-purple-500/10 border-purple-500/40'
-                                : 'bg-dark-bg border-dark-border hover:border-slate-500'
-                            }`}
-                          >
-                            <Checkbox
-                              checked={selected}
-                              onCheckedChange={() => toggleSelect(lora.id)}
-                              className="shrink-0 data-[state=checked]:bg-purple-500 data-[state=checked]:border-purple-500"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                            {lora.imageUrl ? (
-                              <img
-                                src={lora.imageUrl}
-                                alt=""
-                                className="w-9 h-9 rounded object-cover shrink-0"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <div className="w-9 h-9 rounded bg-dark-card shrink-0 flex items-center justify-center">
-                                <User className="h-4 w-4 text-slate-500" />
-                              </div>
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium text-white truncate" title={lora.name}>
-                                {lora.name}
-                              </p>
-                              {(lora.activationWords ?? []).length > 0 ? (
-                                <p className="text-[10px] text-slate-500 truncate">
-                                  {(lora.activationWords ?? []).slice(0, 3).join(', ')}
-                                  {(lora.activationWords ?? []).length > 3 && ' …'}
-                                </p>
-                              ) : (
-                                <p className="text-[10px] text-amber-500/70 flex items-center gap-0.5">
-                                  <AlertTriangle className="h-2.5 w-2.5" />
-                                  No trigger words
-                                </p>
-                              )}
-                            </div>
-                          </button>
-                        );
-                      })}
+                    <div className="space-y-3 pr-2">
+                      {loraGroups.map(([groupLabel, loras]) => (
+                        <div key={groupLabel}>
+                          {/* Group heading */}
+                          <div className="flex items-center gap-2 mb-1 px-1">
+                            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                              {groupLabel}
+                            </span>
+                            <span className="text-[10px] text-slate-600">
+                              ({loras.length})
+                            </span>
+                          </div>
+                          <div className="space-y-1">
+                            {loras.map((lora) => {
+                              const selected = selectedIds.has(lora.id);
+                              return (
+                                <button
+                                  key={lora.id}
+                                  type="button"
+                                  onClick={() => toggleSelect(lora.id)}
+                                  className={`flex items-center gap-2.5 w-full p-2 rounded-lg border text-left transition-colors ${
+                                    selected
+                                      ? 'bg-purple-500/10 border-purple-500/40'
+                                      : 'bg-dark-bg border-dark-border hover:border-slate-500'
+                                  }`}
+                                >
+                                  <Checkbox
+                                    checked={selected}
+                                    onCheckedChange={() => toggleSelect(lora.id)}
+                                    className="shrink-0 data-[state=checked]:bg-purple-500 data-[state=checked]:border-purple-500"
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                  {lora.imageUrl ? (
+                                    <img
+                                      src={lora.imageUrl}
+                                      alt=""
+                                      className="w-9 h-9 rounded object-cover shrink-0"
+                                      loading="lazy"
+                                    />
+                                  ) : (
+                                    <div className="w-9 h-9 rounded bg-dark-card shrink-0 flex items-center justify-center">
+                                      <User className="h-4 w-4 text-slate-500" />
+                                    </div>
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium text-white truncate" title={lora.name}>
+                                      {lora.name}
+                                    </p>
+                                    {(lora.activationWords ?? []).length > 0 ? (
+                                      <p className="text-[10px] text-slate-500 truncate">
+                                        {(lora.activationWords ?? []).slice(0, 3).join(', ')}
+                                        {(lora.activationWords ?? []).length > 3 && ' …'}
+                                      </p>
+                                    ) : (
+                                      <p className="text-[10px] text-amber-500/70 flex items-center gap-0.5">
+                                        <AlertTriangle className="h-2.5 w-2.5" />
+                                        No trigger words
+                                      </p>
+                                    )}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </ScrollArea>
                 )}
