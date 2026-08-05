@@ -1397,6 +1397,18 @@ function friendlyGenerationError(raw: string): string {
 
             if (deadOutput) {
               logger.info(`❌ Terminal failure (dead output): ${deadReason} for token ${token.substring(0, 20)}...`);
+
+              // Record timing for dead-output failures so failure latency is visible
+              if (pollerInfo.queueExitedAt !== undefined) {
+                const now = Date.now();
+                const queueMs = pollerInfo.queueExitedAt - pollerInfo.startedAt;
+                const generateMs = now - pollerInfo.queueExitedAt;
+                for (const gid of pollerInfo.generations) {
+                  storage.updateGenerationTiming(gid, Math.max(0, queueMs), Math.max(0, generateMs))
+                    .catch(e => logger.error(`Failed to record timing for ${gid}:`, e));
+                }
+              }
+
               for (const generationId of pollerInfo.generations) {
                 try {
                   await storage.updateGenerationStatus(generationId, "failed");
@@ -1508,6 +1520,17 @@ function friendlyGenerationError(raw: string): string {
           // Terminal failure: CivitAI reported a final failure state (failed/expired/canceled)
           // and getWorkflowStatus deliberately omits `result`. Stop immediately — no grace window.
           logger.info(`❌ Terminal failure detected: Job has scheduled:false with no results — stopping immediately`);
+
+          // Record timing for terminal failures so failure latency is visible
+          if (pollerInfo.queueExitedAt !== undefined) {
+            const now = Date.now();
+            const queueMs = pollerInfo.queueExitedAt - pollerInfo.startedAt;
+            const generateMs = now - pollerInfo.queueExitedAt;
+            for (const gid of pollerInfo.generations) {
+              storage.updateGenerationTiming(gid, Math.max(0, queueMs), Math.max(0, generateMs))
+                .catch(e => logger.error(`Failed to record timing for ${gid}:`, e));
+            }
+          }
 
           // Mark all generations as failed in database
           for (const generationId of pollerInfo.generations) {
