@@ -49,6 +49,9 @@ import {
   FolderOpen,
   UserPlus,
   Trash2,
+  GitMerge,
+  PlusCircle,
+  X as XIcon,
 } from 'lucide-react';
 
 // ── Character LoRA detection (mirrors lora-selector.tsx logic) ──────────────
@@ -78,6 +81,8 @@ interface YearbookResult {
   generationId?: string;
   error?: string;
   startedAt?: number; // ms timestamp — for the card to show "queued" label
+  /** Extra (non-character) LoRA names that were active when this result was generated. */
+  resultExtraLoras?: { id: string; name: string }[];
 }
 
 interface SavedRun {
@@ -86,6 +91,8 @@ interface SavedRun {
   prompt: string;
   results: YearbookResult[];
   savedAt: number;
+  extraLoras?: ExtraLora[];  // scene/style LoRAs active during the run
+  yearbookSeed?: number;     // seed used (−1 = random)
 }
 
 // Extra LoRA applied to every generation (non-character)
@@ -244,6 +251,15 @@ export default function Yearbook() {
   const [showSavedPanel, setShowSavedPanel] = useState(false);
   const [isSavingRun, setIsSavingRun] = useState(false);
 
+  // Track which saved run is currently loaded (for append mode)
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeRunName, setActiveRunName] = useState<string>('');
+
+  // Append dialog — lets user add more characters to a loaded run
+  const [showAppendDialog, setShowAppendDialog] = useState(false);
+  const [appendSelectedIds, setAppendSelectedIds] = useState<Set<string>>(new Set());
+  const [appendSearch, setAppendSearch] = useState('');
+
   useEffect(() => {
     try { localStorage.setItem('yearbook_saved_runs', JSON.stringify(savedRuns)); }
     catch { /* ignore */ }
@@ -257,22 +273,63 @@ export default function Yearbook() {
       prompt,
       results,
       savedAt: Date.now(),
+      extraLoras: extraLorasForGen,
+      yearbookSeed,
     };
     setSavedRuns((prev) => [run, ...prev]);
     setShowSaveDialog(false);
     setSaveRunName('');
+    setActiveRunId(run.id);
+    setActiveRunName(run.name);
     toast({ title: `✓ Saved "${name}"` });
   };
 
   const loadRun = (run: SavedRun) => {
     setResults(run.results);
     setPrompt(run.prompt);
+    // Restore extra LoRAs (gracefully — missing field defaults to empty)
+    if (run.extraLoras?.length) {
+      setExtraLoras(new Map(run.extraLoras.map((l) => [l.id, l.strength])));
+    } else {
+      setExtraLoras(new Map());
+    }
+    // Restore seed (−1 if not stored)
+    setYearbookSeed(run.yearbookSeed ?? -1);
+    setActiveRunId(run.id);
+    setActiveRunName(run.name);
     setShowSavedPanel(false);
     toast({ title: `Loaded "${run.name}"` });
   };
 
   const deleteRun = (id: string) => {
     setSavedRuns((prev) => prev.filter((r) => r.id !== id));
+    if (activeRunId === id) {
+      setActiveRunId(null);
+      setActiveRunName('');
+    }
+  };
+
+  // ── Combine runs ──────────────────────────────────────────────────────────
+  // Merge a saved run into the current results grid.
+  // Dedup key: loraId — keep existing completed result; incoming wins only when
+  // the existing slot is failed or pending.
+  const combineRuns = (incoming: SavedRun) => {
+    setResults((prev) => {
+      const existingIds = new Map(prev.map((r, i) => [r.loraId, i]));
+      const merged = [...prev];
+      for (const result of incoming.results) {
+        const existingIdx = existingIds.get(result.loraId);
+        if (existingIdx === undefined) {
+          merged.push(result);
+          existingIds.set(result.loraId, merged.length - 1);
+        } else if (merged[existingIdx].status !== 'completed' && result.status === 'completed') {
+          merged[existingIdx] = result;
+        }
+      }
+      return merged;
+    });
+    setShowSavedPanel(false);
+    toast({ title: `✓ Merged "${incoming.name}" into current results` });
   };
 
   // ── Save as Character ─────────────────────────────────────────────────────
@@ -467,6 +524,35 @@ export default function Yearbook() {
     [characterLoras, selectedIds]
   );
 
+  // LoRAs available to add in append mode — excludes those already in the grid
+  const appendLoraPool = useMemo(() => {
+    const inGrid = new Set(results.map((r) => r.loraId));
+    const q = appendSearch.trim().toLowerCase();
+    return characterLoras.filter((l) => {
+      if (inGrid.has(l.id)) return false;
+      if (!q) return true;
+      return (
+        l.name.toLowerCase().includes(q) ||
+        (l.activationWords ?? []).some((w) => w.toLowerCase().includes(q))
+      );
+    });
+  }, [characterLoras, results, appendSearch]);
+
+  const appendSelectedChars = useMemo(
+    () => appendLoraPool.filter((l) => appendSelectedIds.has(l.id)),
+    [appendLoraPool, appendSelectedIds]
+  );
+
+  // Resolved extra LoRA names — used for ResultCard badges
+  const extraLoraNames = useMemo(
+    () =>
+      extraLorasForGen.map((l) => {
+        const m = allModels.find((model) => model.id === l.id);
+        return { id: l.id, name: m?.name ?? l.id };
+      }),
+    [extraLorasForGen, allModels]
+  );
+
   // ── Selection helpers ─────────────────────────────────────────────────────
 
   const toggleSelect = (id: string) => {
@@ -639,6 +725,8 @@ export default function Yearbook() {
                   imageUrl: result.imageUrl,
                   generationId,
                   error: result.error,
+                  // Stamp provenance — snapshot the extra LoRAs at generation time
+                  resultExtraLoras: extraLoraNames,
                 }
               : r
           )
@@ -678,6 +766,170 @@ export default function Yearbook() {
     toast({ title: 'Yearbook cancelled' });
   };
 
+  // ── Append new characters to a loaded run ────────────────────────────────
+  // Generates only the supplied characters, appending new result slots to the
+  // existing grid rather than replacing it.
+  const runAppend = async (appendChars: Model[]) => {
+    if (!appendChars.length) return;
+    const settings = form.getValues();
+    if (!settings.modelId) return;
+
+    cancelRef.current = false;
+    setIsRunning(true);
+    setSubmittedCount(0);
+    setShowAppendDialog(false);
+
+    // Remember where new slots start so we can address them by index
+    const baseOffset = results.length;
+
+    const newSlots: YearbookResult[] = appendChars.map((lora) => ({
+      loraId: lora.id,
+      loraName: lora.name,
+      loraImage: lora.imageUrl,
+      triggerWords: lora.activationWords ?? [],
+      status: 'pending' as ResultStatus,
+    }));
+    setResults((prev) => [...prev, ...newSlots]);
+
+    type SubmitOutcome =
+      | { index: number; generationId: string }
+      | { index: number; error: string };
+
+    const submitOutcomes = await Promise.allSettled(
+      appendChars.map(async (lora, i): Promise<SubmitOutcome> => {
+        try {
+          if (cancelRef.current) return { index: baseOffset + i, error: 'Cancelled' };
+
+          const triggerWords = lora.activationWords ?? [];
+          const fullPrompt = triggerWords.length
+            ? `${prompt.trim()}, ${triggerWords.join(', ')}`
+            : prompt.trim();
+
+          const body = {
+            modelId: settings.modelId,
+            prompt: fullPrompt,
+            negativePrompt: settings.negativePrompt ?? '',
+            seed: yearbookSeed,
+            seedIncrement: (settings as any).seedIncrement ?? 3,
+            steps: settings.steps,
+            cfgScale: settings.cfgScale,
+            width: settings.width,
+            height: settings.height,
+            scheduler: settings.scheduler,
+            clipSkip: settings.clipSkip,
+            quantity: 1,
+            loras: [{ id: lora.id, strength: 1.0 }, ...extraLorasForGen],
+            aspectRatio: (settings as any).aspectRatio ?? '1:1',
+            creativity: (settings as any).creativity ?? 'medium',
+          };
+
+          const res = await apiRequest('POST', '/api/generations', body);
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ message: 'Failed to start generation' }));
+            return { index: baseOffset + i, error: err.message || 'Failed to start generation' };
+          }
+          const generation: Generation & { message?: string } = await res.json();
+          if (!generation.id) return { index: baseOffset + i, error: generation.message || 'No generation ID' };
+
+          setResults((prev) =>
+            prev.map((r, idx) =>
+              idx === baseOffset + i
+                ? { ...r, status: 'running', startedAt: Date.now(), generationId: generation.id }
+                : r
+            )
+          );
+          setSubmittedCount((c) => c + 1);
+          return { index: baseOffset + i, generationId: generation.id };
+        } catch (err: any) {
+          return { index: baseOffset + i, error: err.message ?? 'Failed to submit' };
+        }
+      })
+    );
+
+    type Submitted = { index: number; generationId: string };
+    const submitted: Submitted[] = [];
+
+    for (const outcome of submitOutcomes) {
+      const val = outcome.status === 'fulfilled' ? outcome.value : { index: -1, error: 'Unknown error' };
+      if ('generationId' in val) {
+        submitted.push(val as Submitted);
+      } else {
+        const { index, error } = val as { index: number; error: string };
+        if (index >= 0) {
+          setResults((prev) =>
+            prev.map((r, idx) => idx === index ? { ...r, status: 'failed', error } : r)
+          );
+        }
+      }
+    }
+
+    setResults((prev) =>
+      prev.map((r, idx) =>
+        idx >= baseOffset && r.status === 'pending'
+          ? { ...r, status: 'failed', error: 'Cancelled' }
+          : r
+      )
+    );
+
+    await Promise.all(
+      submitted.map(async ({ index, generationId }) => {
+        if (cancelRef.current) {
+          setResults((prev) =>
+            prev.map((r, idx) =>
+              idx === index && r.status === 'running'
+                ? { ...r, status: 'failed', error: 'Cancelled' }
+                : r
+            )
+          );
+          return;
+        }
+        const result = await waitForGeneration(generationId);
+        setResults((prev) =>
+          prev.map((r, idx) =>
+            idx === index
+              ? {
+                  ...r,
+                  status: result.error ? 'failed' : 'completed',
+                  imageUrl: result.imageUrl,
+                  generationId,
+                  error: result.error,
+                  // Stamp provenance — snapshot the extra LoRAs at generation time
+                  resultExtraLoras: extraLoraNames,
+                }
+              : r
+          )
+        );
+      })
+    );
+
+    setIsRunning(false);
+    setSubmittedCount(0);
+    setAppendSelectedIds(new Set());
+
+    // Flush results to localStorage AND back-propagate into the active saved run
+    setResults((prev) => {
+      try { localStorage.setItem('yearbook_results', JSON.stringify(prev)); } catch { /* ignore */ }
+
+      // Persist appended results back into the saved run so reloading retains them
+      if (activeRunId) {
+        setSavedRuns((runs) =>
+          runs.map((r) =>
+            r.id === activeRunId ? { ...r, results: prev } : r
+          )
+        );
+      }
+
+      if (!cancelRef.current) {
+        const added = appendChars.length;
+        toast({
+          title: '✓ Characters added!',
+          description: `${added} new character${added !== 1 ? 's' : ''} appended to the run.`,
+        });
+      }
+      return prev;
+    });
+  };
+
   // ── Save as Character ─────────────────────────────────────────────────────
 
   const saveAsCharacter = async () => {
@@ -690,10 +942,18 @@ export default function Yearbook() {
       ? `${prompt.trim()}, ${triggerWords.join(', ')}`
       : prompt.trim();
 
+    // Use a stable server-side image URL when the result came from a tracked
+    // generation; fall back to the raw imageUrl if no generationId is stored.
+    const stableImageUrl = saveAsTarget.generationId
+      ? `/api/images/${saveAsTarget.generationId}`
+      : saveAsTarget.imageUrl;
+
     const body = {
       name,
       basePrompt: fullPrompt,
-      imageUrl: saveAsTarget.imageUrl,
+      negativePrompt: settings.negativePrompt ?? '',
+      seed: yearbookSeed,
+      imageUrl: stableImageUrl,
       baseModel: settings.modelId,
       steps: settings.steps,
       cfgScale: settings.cfgScale,
@@ -701,6 +961,8 @@ export default function Yearbook() {
       height: settings.height,
       scheduler: settings.scheduler,
       clipSkip: settings.clipSkip,
+      source: 'User',
+      referenceGenerationId: saveAsTarget.generationId,
       // Character LoRA + any extra LoRAs active during this run
       loras: [
         { id: saveAsTarget.loraId, strength: 1.0 },
@@ -1350,7 +1612,35 @@ export default function Yearbook() {
             {results.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-white">Results</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-semibold text-white">Results</h2>
+                    {/* Active run indicator + Add characters */}
+                    {activeRunId && !isRunning && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-slate-500 bg-dark-bg border border-dark-border rounded-full px-2 py-0.5 truncate max-w-[140px]" title={activeRunName}>
+                          {activeRunName}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => { setAppendSearch(''); setShowAppendDialog(true); }}
+                          className="h-6 gap-1 text-[11px] border-purple-500/40 text-purple-300 hover:text-white hover:border-purple-400"
+                        >
+                          <PlusCircle className="h-3 w-3" />
+                          Add characters
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => { setActiveRunId(null); setActiveRunName(''); }}
+                          title="Unlink from saved run"
+                          className="text-slate-600 hover:text-slate-400 transition-colors"
+                        >
+                          <XIcon className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     {/* Save current run */}
                     {!isRunning && completedCount > 0 && (
@@ -1401,6 +1691,18 @@ export default function Yearbook() {
                         >
                           Load
                         </Button>
+                        {run.id !== activeRunId && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => combineRuns(run)}
+                            title="Merge this run into the current results"
+                            className="h-6 px-2 text-xs text-blue-400 hover:text-blue-200"
+                          >
+                            <GitMerge className="h-3 w-3" />
+                          </Button>
+                        )}
                         <button
                           type="button"
                           onClick={() => deleteRun(run.id)}
@@ -1416,9 +1718,10 @@ export default function Yearbook() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
                   {results.map((result, idx) => (
                     <ResultCard
-                      key={result.loraId}
+                      key={`${result.loraId}-${idx}`}
                       result={result}
                       index={idx}
+                      extraLoraNames={result.resultExtraLoras}
                       onSaveAsCharacter={() => {
                         setSaveAsTarget(result);
                         setSaveAsName(result.loraName);
@@ -1487,6 +1790,101 @@ export default function Yearbook() {
         </div>
       </div>
 
+      {/* ── Append characters dialog ───────────────────────────────────────── */}
+      <Dialog open={showAppendDialog} onOpenChange={(open) => { if (!open) setShowAppendDialog(false); }}>
+        <DialogContent className="bg-dark-card border-dark-border text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PlusCircle className="h-4 w-4 text-purple-400" />
+              Add characters to run
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+              <Input
+                value={appendSearch}
+                onChange={(e) => setAppendSearch(e.target.value)}
+                placeholder="Search character LoRAs…"
+                className="pl-8 h-8 text-xs bg-dark-bg border-dark-border"
+                autoFocus
+              />
+            </div>
+            {appendLoraPool.length === 0 ? (
+              <p className="text-center text-xs text-slate-500 py-6">
+                {characterLoras.length === 0
+                  ? 'No character LoRAs found.'
+                  : 'All character LoRAs are already in this run.'}
+              </p>
+            ) : (
+              <ScrollArea className="h-[300px]">
+                <div className="space-y-1 pr-2">
+                  {appendLoraPool.map((lora) => {
+                    const selected = appendSelectedIds.has(lora.id);
+                    return (
+                      <button
+                        key={lora.id}
+                        type="button"
+                        onClick={() =>
+                          setAppendSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            next.has(lora.id) ? next.delete(lora.id) : next.add(lora.id);
+                            return next;
+                          })
+                        }
+                        className={`flex items-center gap-2.5 w-full p-2 rounded-lg border text-left transition-colors ${
+                          selected
+                            ? 'bg-purple-500/10 border-purple-500/40'
+                            : 'bg-dark-bg border-dark-border hover:border-slate-500'
+                        }`}
+                      >
+                        <Checkbox
+                          checked={selected}
+                          onCheckedChange={() => {}}
+                          className="shrink-0 data-[state=checked]:bg-purple-500 data-[state=checked]:border-purple-500"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        {lora.imageUrl ? (
+                          <img src={lora.imageUrl} alt="" className="w-8 h-8 rounded object-cover shrink-0" loading="lazy" />
+                        ) : (
+                          <div className="w-8 h-8 rounded bg-dark-bg shrink-0 flex items-center justify-center">
+                            <User className="h-3.5 w-3.5 text-slate-500" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{lora.name}</p>
+                          {(lora.activationWords ?? []).length > 0 && (
+                            <p className="text-[10px] text-slate-500 truncate">
+                              {(lora.activationWords ?? []).slice(0, 2).join(', ')}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            )}
+            {appendSelectedIds.size > 0 && (
+              <p className="text-xs text-slate-400">{appendSelectedIds.size} character{appendSelectedIds.size !== 1 ? 's' : ''} selected</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowAppendDialog(false)} className="text-slate-400">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => runAppend(appendSelectedChars)}
+              disabled={appendSelectedIds.size === 0 || isRunning}
+              className="bg-purple-600 hover:bg-purple-500"
+            >
+              <Play className="h-4 w-4 mr-1.5" />
+              Generate & Append ({appendSelectedIds.size})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Save run dialog ────────────────────────────────────────────────── */}
       <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
         <DialogContent className="bg-dark-card border-dark-border text-white sm:max-w-md">
@@ -1506,7 +1904,7 @@ export default function Yearbook() {
               />
             </div>
             <p className="text-[11px] text-slate-500">
-              {completedCount} completed image{completedCount !== 1 ? 's' : ''} will be saved. Prompts and settings are not included.
+              {completedCount} completed image{completedCount !== 1 ? 's' : ''} will be saved along with the prompt, extra LoRAs, and seed.
             </p>
           </div>
           <DialogFooter>
@@ -1598,10 +1996,12 @@ function ResultCard({
   result,
   index,
   onSaveAsCharacter,
+  extraLoraNames,
 }: {
   result: YearbookResult;
   index: number;
   onSaveAsCharacter?: () => void;
+  extraLoraNames?: { id: string; name: string }[];
 }) {
   // Flip the label from "Generating…" to "Queued at CivitAI…" once we've been
   // waiting more than 2 minutes (CivitAI's queue can run 15-25 min under load).
@@ -1717,6 +2117,26 @@ function ResultCard({
             {result.triggerWords.slice(0, 2).join(', ')}
             {result.triggerWords.length > 2 && ' …'}
           </p>
+        )}
+        {/* LoRA badge row: character LoRA (purple) + extra LoRAs (blue) */}
+        {(extraLoraNames?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-0.5 mt-1">
+            <span
+              className="text-[9px] px-1.5 py-px rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 truncate max-w-[90px]"
+              title={result.loraName}
+            >
+              {result.loraName.length > 12 ? result.loraName.slice(0, 11) + '…' : result.loraName}
+            </span>
+            {extraLoraNames!.map((l) => (
+              <span
+                key={l.id}
+                className="text-[9px] px-1.5 py-px rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 truncate max-w-[70px]"
+                title={l.name}
+              >
+                {l.name.length > 10 ? l.name.slice(0, 9) + '…' : l.name}
+              </span>
+            ))}
+          </div>
         )}
       </div>
     </div>
