@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Header from '@/components/header';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -9,6 +9,15 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Slider } from '@/components/ui/slider';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { useWebSocket } from '@/hooks/use-websocket';
@@ -28,6 +37,11 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Layers,
+  Save,
+  FolderOpen,
+  UserPlus,
+  Trash2,
 } from 'lucide-react';
 
 // ── Character LoRA detection (mirrors lora-selector.tsx logic) ──────────────
@@ -59,6 +73,20 @@ interface YearbookResult {
   startedAt?: number; // ms timestamp — for the card to show "queued" label
 }
 
+interface SavedRun {
+  id: string;          // unique — used as React key and for deletion
+  name: string;
+  prompt: string;
+  results: YearbookResult[];
+  savedAt: number;
+}
+
+// Extra LoRA applied to every generation (non-character)
+interface ExtraLora {
+  id: string;
+  strength: number;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_PROMPT =
@@ -69,6 +97,7 @@ const DEFAULT_PROMPT =
 export default function Yearbook() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   // Read current generation settings from the main panel (read-only — don't clobber them)
   const { form } = useGenerationSettings({
@@ -91,6 +120,15 @@ export default function Yearbook() {
     [allModels]
   );
 
+  // Non-character LoRAs (style, artist, effect, etc.)
+  const nonCharacterLoras = useMemo(
+    () =>
+      allModels
+        .filter((m) => m.type?.toLowerCase() === 'lora' && !isCharacterLora(m))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [allModels]
+  );
+
   // ── UI state ─────────────────────────────────────────────────────────────
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -103,6 +141,89 @@ export default function Yearbook() {
     }
   });
   const [promptExpanded, setPromptExpanded] = useState(false);
+
+  // Extra LoRAs applied to every generation — id → strength
+  const [extraLoras, setExtraLoras] = useState<Map<string, number>>(new Map());
+  const [extraSearch, setExtraSearch] = useState('');
+  const [extraPanelOpen, setExtraPanelOpen] = useState(false);
+
+  const toggleExtraLora = (id: string) => {
+    setExtraLoras((prev) => {
+      const next = new Map(prev);
+      if (next.has(id)) next.delete(id);
+      else next.set(id, 0.8);
+      return next;
+    });
+  };
+  const setExtraStrength = (id: string, strength: number) => {
+    setExtraLoras((prev) => {
+      const next = new Map(prev);
+      next.set(id, strength);
+      return next;
+    });
+  };
+
+  const filteredExtraLoras = useMemo(() => {
+    const q = extraSearch.trim().toLowerCase();
+    if (!q) return nonCharacterLoras;
+    return nonCharacterLoras.filter((l) =>
+      l.name.toLowerCase().includes(q) ||
+      (l.activationWords ?? []).some((w) => w.toLowerCase().includes(q))
+    );
+  }, [nonCharacterLoras, extraSearch]);
+
+  const extraLorasForGen: ExtraLora[] = useMemo(
+    () => Array.from(extraLoras.entries()).map(([id, strength]) => ({ id, strength })),
+    [extraLoras]
+  );
+
+  // ── Saved runs ────────────────────────────────────────────────────────────
+
+  const [savedRuns, setSavedRuns] = useState<SavedRun[]>(() => {
+    try { return JSON.parse(localStorage.getItem('yearbook_saved_runs') || '[]'); }
+    catch { return []; }
+  });
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveRunName, setSaveRunName] = useState('');
+  const [showSavedPanel, setShowSavedPanel] = useState(false);
+  const [isSavingRun, setIsSavingRun] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem('yearbook_saved_runs', JSON.stringify(savedRuns)); }
+    catch { /* ignore */ }
+  }, [savedRuns]);
+
+  const saveCurrentRun = () => {
+    const name = saveRunName.trim() || `Run ${new Date().toLocaleDateString()}`;
+    const run: SavedRun = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      prompt,
+      results,
+      savedAt: Date.now(),
+    };
+    setSavedRuns((prev) => [run, ...prev]);
+    setShowSaveDialog(false);
+    setSaveRunName('');
+    toast({ title: `✓ Saved "${name}"` });
+  };
+
+  const loadRun = (run: SavedRun) => {
+    setResults(run.results);
+    setPrompt(run.prompt);
+    setShowSavedPanel(false);
+    toast({ title: `Loaded "${run.name}"` });
+  };
+
+  const deleteRun = (id: string) => {
+    setSavedRuns((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  // ── Save as Character ─────────────────────────────────────────────────────
+
+  const [saveAsTarget, setSaveAsTarget] = useState<YearbookResult | null>(null);
+  const [saveAsName, setSaveAsName] = useState('');
+  const [isSavingChar, setIsSavingChar] = useState(false);
 
   // Persist prompt whenever it changes
   useEffect(() => {
@@ -377,7 +498,7 @@ export default function Yearbook() {
             scheduler: settings.scheduler,
             clipSkip: settings.clipSkip,
             quantity: 1,
-            loras: [{ id: lora.id, strength: 1.0 }],
+            loras: [{ id: lora.id, strength: 1.0 }, ...extraLorasForGen],
             aspectRatio: settings.aspectRatio ?? '1:1',
             creativity: settings.creativity ?? 'medium',
           };
@@ -492,7 +613,6 @@ export default function Yearbook() {
 
   const cancelRun = () => {
     cancelRef.current = true;
-    // Immediately settle all pending generation watchers so their promises resolve
     for (const [, resolve] of pendingGensRef.current) {
       resolve({ error: 'Cancelled' });
     }
@@ -500,6 +620,54 @@ export default function Yearbook() {
     setIsRunning(false);
     setSubmittedCount(0);
     toast({ title: 'Yearbook cancelled' });
+  };
+
+  // ── Save as Character ─────────────────────────────────────────────────────
+
+  const saveAsCharacter = async () => {
+    if (!saveAsTarget) return;
+    const name = saveAsName.trim();
+    if (!name) return;
+    const settings = form.getValues();
+    const triggerWords = saveAsTarget.triggerWords ?? [];
+    const fullPrompt = triggerWords.length
+      ? `${prompt.trim()}, ${triggerWords.join(', ')}`
+      : prompt.trim();
+
+    const body = {
+      name,
+      basePrompt: fullPrompt,
+      imageUrl: saveAsTarget.imageUrl,
+      baseModel: settings.modelId,
+      steps: settings.steps,
+      cfgScale: settings.cfgScale,
+      width: settings.width,
+      height: settings.height,
+      scheduler: settings.scheduler,
+      clipSkip: settings.clipSkip,
+      // Character LoRA + any extra LoRAs active during this run
+      loras: [
+        { id: saveAsTarget.loraId, strength: 1.0 },
+        ...extraLorasForGen,
+      ],
+    };
+
+    setIsSavingChar(true);
+    try {
+      const res = await apiRequest('POST', '/api/characters', body);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: 'Failed to save character' }));
+        throw new Error(err.message || 'Failed to save character');
+      }
+      queryClient.invalidateQueries({ queryKey: ['/api/characters'] });
+      toast({ title: `✓ Saved "${name}" as a character` });
+      setSaveAsTarget(null);
+      setSaveAsName('');
+    } catch (err: any) {
+      toast({ title: 'Save failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsSavingChar(false);
+    }
   };
 
   // ── Derived counts ────────────────────────────────────────────────────────
@@ -677,6 +845,131 @@ export default function Yearbook() {
                 )}
               </CardContent>
             </Card>
+
+            {/* ── Extra LoRAs ──────────────────────────────────────────────── */}
+            <Card className="bg-dark-card border-dark-border">
+              <CardContent className="pt-4 pb-4 space-y-3">
+                {/* Header — collapse toggle */}
+                <button
+                  type="button"
+                  className="flex items-center justify-between w-full"
+                  onClick={() => setExtraPanelOpen((v) => !v)}
+                >
+                  <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
+                    <Layers className="h-4 w-4 text-blue-400" />
+                    Extra LoRAs
+                    {extraLoras.size > 0 && (
+                      <Badge variant="secondary" className="text-xs ml-1 bg-blue-500/20 text-blue-300 border-blue-500/30">
+                        {extraLoras.size} active
+                      </Badge>
+                    )}
+                  </h2>
+                  {extraPanelOpen ? (
+                    <ChevronUp className="h-4 w-4 text-slate-500" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-slate-500" />
+                  )}
+                </button>
+
+                {!extraPanelOpen && extraLoras.size > 0 && (
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    {Array.from(extraLoras.entries())
+                      .map(([id, str]) => {
+                        const m = nonCharacterLoras.find((l) => l.id === id);
+                        return m ? `${m.name} (${str.toFixed(1)})` : id;
+                      })
+                      .join(', ')}
+                  </p>
+                )}
+
+                {extraPanelOpen && (
+                  <>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      Applied to every generation in the run — use for style, lighting, or effect LoRAs.
+                    </p>
+
+                    {/* Search */}
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-500" />
+                      <Input
+                        value={extraSearch}
+                        onChange={(e) => setExtraSearch(e.target.value)}
+                        placeholder="Search extra LoRAs…"
+                        className="pl-8 h-8 text-xs bg-dark-bg border-dark-border"
+                      />
+                    </div>
+
+                    {filteredExtraLoras.length === 0 ? (
+                      <div className="text-center py-6 text-slate-500 text-xs">
+                        {nonCharacterLoras.length === 0
+                          ? 'No non-character LoRAs found.'
+                          : 'No matches.'}
+                      </div>
+                    ) : (
+                      <ScrollArea className="h-[220px]">
+                        <div className="space-y-1 pr-2">
+                          {filteredExtraLoras.map((lora) => {
+                            const active = extraLoras.has(lora.id);
+                            const strength = extraLoras.get(lora.id) ?? 0.8;
+                            return (
+                              <div key={lora.id} className="space-y-1">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExtraLora(lora.id)}
+                                  className={`flex items-center gap-2.5 w-full p-2 rounded-lg border text-left transition-colors ${
+                                    active
+                                      ? 'bg-blue-500/10 border-blue-500/40'
+                                      : 'bg-dark-bg border-dark-border hover:border-slate-500'
+                                  }`}
+                                >
+                                  <Checkbox
+                                    checked={active}
+                                    onCheckedChange={() => toggleExtraLora(lora.id)}
+                                    className="shrink-0 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                  {lora.imageUrl ? (
+                                    <img src={lora.imageUrl} alt="" className="w-8 h-8 rounded object-cover shrink-0" loading="lazy" />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded bg-dark-bg shrink-0 flex items-center justify-center">
+                                      <Layers className="h-3.5 w-3.5 text-slate-500" />
+                                    </div>
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium text-white truncate">{lora.name}</p>
+                                    {lora.loraCategory && (
+                                      <p className="text-[10px] text-slate-500">{lora.loraCategory}</p>
+                                    )}
+                                  </div>
+                                </button>
+                                {active && (
+                                  <div className="flex items-center gap-2 px-2 pb-1">
+                                    <span className="text-[10px] text-slate-500 w-12 shrink-0">
+                                      Strength
+                                    </span>
+                                    <Slider
+                                      min={0}
+                                      max={2}
+                                      step={0.05}
+                                      value={[strength]}
+                                      onValueChange={([v]) => setExtraStrength(lora.id, v)}
+                                      className="flex-1"
+                                    />
+                                    <span className="text-[10px] text-slate-300 w-7 text-right">
+                                      {strength.toFixed(2)}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </ScrollArea>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
           </div>
 
           {/* ── RIGHT: Config + Results ────────────────────────────────────── */}
@@ -783,10 +1076,81 @@ export default function Yearbook() {
             {/* Results grid */}
             {results.length > 0 && (
               <div>
-                <h2 className="text-sm font-semibold text-white mb-3">Results</h2>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-white">Results</h2>
+                  <div className="flex items-center gap-2">
+                    {/* Save current run */}
+                    {!isRunning && completedCount > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowSaveDialog(true)}
+                        className="h-7 gap-1.5 text-xs border-dark-border text-slate-400 hover:text-white"
+                      >
+                        <Save className="h-3 w-3" />
+                        Save run
+                      </Button>
+                    )}
+                    {/* Saved runs */}
+                    {savedRuns.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowSavedPanel((v) => !v)}
+                        className="h-7 gap-1.5 text-xs border-dark-border text-slate-400 hover:text-white"
+                      >
+                        <FolderOpen className="h-3 w-3" />
+                        Saved ({savedRuns.length})
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Saved runs dropdown */}
+                {showSavedPanel && savedRuns.length > 0 && (
+                  <div className="mb-4 rounded-lg border border-dark-border bg-dark-card divide-y divide-dark-border">
+                    {savedRuns.map((run) => (
+                      <div key={run.id} className="flex items-center gap-3 px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{run.name}</p>
+                          <p className="text-[10px] text-slate-500">
+                            {new Date(run.savedAt).toLocaleDateString()} · {run.results.filter((r) => r.status === 'completed').length} images
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => loadRun(run)}
+                          className="h-6 px-2 text-xs text-slate-400 hover:text-white"
+                        >
+                          Load
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => deleteRun(run.id)}
+                          className="text-slate-600 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
                   {results.map((result, idx) => (
-                    <ResultCard key={result.loraId} result={result} index={idx} />
+                    <ResultCard
+                      key={result.loraId}
+                      result={result}
+                      index={idx}
+                      onSaveAsCharacter={() => {
+                        setSaveAsTarget(result);
+                        setSaveAsName(result.loraName);
+                      }}
+                    />
                   ))}
                 </div>
               </div>
@@ -799,9 +1163,156 @@ export default function Yearbook() {
                 <p className="text-sm">Select characters and run Yearbook to see results here</p>
               </div>
             )}
+
+            {/* Saved runs button when no results yet */}
+            {results.length === 0 && savedRuns.length > 0 && (
+              <div className="flex justify-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSavedPanel((v) => !v)}
+                  className="gap-2 text-slate-400 hover:text-white border-dark-border"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  Load a saved run ({savedRuns.length})
+                </Button>
+              </div>
+            )}
+
+            {showSavedPanel && results.length === 0 && savedRuns.length > 0 && (
+              <div className="rounded-lg border border-dark-border bg-dark-card divide-y divide-dark-border">
+                {savedRuns.map((run) => (
+                  <div key={run.id} className="flex items-center gap-3 px-3 py-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-white truncate">{run.name}</p>
+                      <p className="text-[10px] text-slate-500">
+                        {new Date(run.savedAt).toLocaleDateString()} · {run.results.filter((r) => r.status === 'completed').length} images
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => loadRun(run)}
+                      className="h-6 px-2 text-xs text-slate-400 hover:text-white"
+                    >
+                      Load
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => deleteRun(run.id)}
+                      className="text-slate-600 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* ── Save run dialog ────────────────────────────────────────────────── */}
+      <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+        <DialogContent className="bg-dark-card border-dark-border text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save this run</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-sm text-slate-300">Run name</Label>
+              <Input
+                value={saveRunName}
+                onChange={(e) => setSaveRunName(e.target.value)}
+                placeholder={`Run ${new Date().toLocaleDateString()}`}
+                className="bg-dark-bg border-dark-border text-white"
+                onKeyDown={(e) => { if (e.key === 'Enter') saveCurrentRun(); }}
+                autoFocus
+              />
+            </div>
+            <p className="text-[11px] text-slate-500">
+              {completedCount} completed image{completedCount !== 1 ? 's' : ''} will be saved. Prompts and settings are not included.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowSaveDialog(false)} className="text-slate-400">
+              Cancel
+            </Button>
+            <Button onClick={saveCurrentRun} className="bg-purple-600 hover:bg-purple-500">
+              <Save className="h-4 w-4 mr-1.5" />
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Save as character dialog ────────────────────────────────────────── */}
+      <Dialog open={!!saveAsTarget} onOpenChange={(open) => { if (!open) setSaveAsTarget(null); }}>
+        <DialogContent className="bg-dark-card border-dark-border text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save as Character</DialogTitle>
+          </DialogHeader>
+          {saveAsTarget && (
+            <div className="space-y-4 py-2">
+              {/* Preview */}
+              {saveAsTarget.imageUrl && (
+                <div className="flex items-center gap-3">
+                  <img
+                    src={saveAsTarget.imageUrl}
+                    alt=""
+                    className="w-16 h-20 rounded-lg object-cover border border-dark-border shrink-0"
+                  />
+                  <div className="text-[11px] text-slate-500 space-y-1">
+                    <p><span className="text-slate-400">LoRA:</span> {saveAsTarget.loraName}</p>
+                    {saveAsTarget.triggerWords.length > 0 && (
+                      <p><span className="text-slate-400">Triggers:</span> {saveAsTarget.triggerWords.join(', ')}</p>
+                    )}
+                    {extraLoras.size > 0 && (
+                      <p><span className="text-slate-400">+{extraLoras.size} extra LoRA{extraLoras.size !== 1 ? 's' : ''}</span></p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Name */}
+              <div className="space-y-1.5">
+                <Label className="text-sm text-slate-300">Character name</Label>
+                <Input
+                  value={saveAsName}
+                  onChange={(e) => setSaveAsName(e.target.value)}
+                  placeholder="Enter a name…"
+                  className="bg-dark-bg border-dark-border text-white"
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !isSavingChar) saveAsCharacter(); }}
+                  autoFocus
+                />
+              </div>
+
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                The character will be created with the base prompt, trigger words, LoRA selection, and model settings from this run. You can edit it from the Characters page.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSaveAsTarget(null)} className="text-slate-400">
+              Cancel
+            </Button>
+            <Button
+              onClick={saveAsCharacter}
+              disabled={!saveAsName.trim() || isSavingChar}
+              className="bg-purple-600 hover:bg-purple-500"
+            >
+              {isSavingChar ? (
+                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+              ) : (
+                <UserPlus className="h-4 w-4 mr-1.5" />
+              )}
+              {isSavingChar ? 'Saving…' : 'Save Character'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -810,7 +1321,15 @@ export default function Yearbook() {
 
 const QUEUED_LABEL_AFTER_MS = 2 * 60 * 1000; // show "Queued at CivitAI" after 2 min
 
-function ResultCard({ result, index }: { result: YearbookResult; index: number }) {
+function ResultCard({
+  result,
+  index,
+  onSaveAsCharacter,
+}: {
+  result: YearbookResult;
+  index: number;
+  onSaveAsCharacter?: () => void;
+}) {
   // Flip the label from "Generating…" to "Queued at CivitAI…" once we've been
   // waiting more than 2 minutes (CivitAI's queue can run 15-25 min under load).
   const [isQueued, setIsQueued] = useState(false);
@@ -831,7 +1350,7 @@ function ResultCard({ result, index }: { result: YearbookResult; index: number }
   return (
     <div className="flex flex-col gap-1.5">
       {/* Image area */}
-      <div className="relative aspect-[3/4] rounded-lg overflow-hidden bg-dark-card border border-dark-border">
+      <div className="group relative aspect-[3/4] rounded-lg overflow-hidden bg-dark-card border border-dark-border">
         {result.status === 'pending' && (
           <div className="absolute inset-0 flex items-center justify-center text-slate-700">
             <ImageIcon className="h-6 w-6" />
@@ -870,11 +1389,26 @@ function ResultCard({ result, index }: { result: YearbookResult; index: number }
           </div>
         )}
 
-        {/* Status badge */}
+        {/* Status badge + save-as-character button */}
         {result.status === 'completed' && (
-          <div className="absolute top-1.5 right-1.5">
-            <CheckCircle className="h-4 w-4 text-emerald-400 drop-shadow" />
-          </div>
+          <>
+            <div className="absolute top-1.5 right-1.5">
+              <CheckCircle className="h-4 w-4 text-emerald-400 drop-shadow" />
+            </div>
+            {onSaveAsCharacter && (
+              <div className="absolute bottom-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onSaveAsCharacter(); }}
+                  title="Save as character"
+                  className="flex items-center gap-1 bg-dark-bg/90 border border-dark-border rounded px-1.5 py-0.5 text-[10px] text-slate-300 hover:text-white hover:border-purple-500/50 transition-colors"
+                >
+                  <UserPlus className="h-3 w-3" />
+                  Save
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {/* No trigger-word indicator */}
