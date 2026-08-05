@@ -129,6 +129,22 @@ export default function Yearbook() {
     [allModels]
   );
 
+  // Favorites — same source as the main LoRA selector
+  const { data: modelFavorites = [] } = useQuery<{ modelId: string }[]>({
+    queryKey: ['/api/model-favorites'],
+  });
+  const favoriteIds = useMemo(
+    () => new Set(modelFavorites.map((f) => f.modelId)),
+    [modelFavorites]
+  );
+
+  // Active checkpoint's baseModel — used to filter compatible extra LoRAs
+  const activeModelId = form.watch('modelId');
+  const activeBaseModel = useMemo(() => {
+    if (!activeModelId) return null;
+    return allModels.find((m) => m.id === activeModelId)?.baseModel ?? null;
+  }, [activeModelId, allModels]);
+
   // ── UI state ─────────────────────────────────────────────────────────────
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -142,10 +158,22 @@ export default function Yearbook() {
   });
   const [promptExpanded, setPromptExpanded] = useState(false);
 
+  // Yearbook-specific seed — independent of the main panel.
+  // Default -1 = random each run, which ensures fresh results even when
+  // the main panel has a fixed seed locked in.
+  const [yearbookSeed, setYearbookSeed] = useState<number>(() => {
+    try { return parseInt(localStorage.getItem('yearbook_seed') ?? '-1', 10) || -1; }
+    catch { return -1; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('yearbook_seed', String(yearbookSeed)); } catch { /* ignore */ }
+  }, [yearbookSeed]);
+
   // Extra LoRAs applied to every generation — id → strength
   const [extraLoras, setExtraLoras] = useState<Map<string, number>>(new Map());
   const [extraSearch, setExtraSearch] = useState('');
   const [extraPanelOpen, setExtraPanelOpen] = useState(false);
+  const [extraTab, setExtraTab] = useState<'favorites' | 'all'>('favorites');
 
   const toggleExtraLora = (id: string) => {
     setExtraLoras((prev) => {
@@ -164,13 +192,31 @@ export default function Yearbook() {
   };
 
   const filteredExtraLoras = useMemo(() => {
+    // 1. Start with the full non-character pool
+    let pool = nonCharacterLoras;
+
+    // 2. Filter to the active checkpoint's baseModel so only compatible LoRAs show
+    if (activeBaseModel) {
+      pool = pool.filter((l) => !l.baseModel || l.baseModel === activeBaseModel);
+    }
+
+    // 3. Favorites tab shows only favourited LoRAs; "All" shows everything
+    if (extraTab === 'favorites') {
+      pool = pool.filter((l) => favoriteIds.has(l.id));
+    }
+
+    // 4. Search filter
     const q = extraSearch.trim().toLowerCase();
-    if (!q) return nonCharacterLoras;
-    return nonCharacterLoras.filter((l) =>
-      l.name.toLowerCase().includes(q) ||
-      (l.activationWords ?? []).some((w) => w.toLowerCase().includes(q))
-    );
-  }, [nonCharacterLoras, extraSearch]);
+    if (q) {
+      pool = pool.filter(
+        (l) =>
+          l.name.toLowerCase().includes(q) ||
+          (l.activationWords ?? []).some((w) => w.toLowerCase().includes(q))
+      );
+    }
+
+    return pool;
+  }, [nonCharacterLoras, activeBaseModel, extraTab, favoriteIds, extraSearch]);
 
   const extraLorasForGen: ExtraLora[] = useMemo(
     () => Array.from(extraLoras.entries()).map(([id, strength]) => ({ id, strength })),
@@ -489,7 +535,7 @@ export default function Yearbook() {
             modelId: settings.modelId,
             prompt: fullPrompt,
             negativePrompt: settings.negativePrompt ?? '',
-            seed: settings.seed ?? -1,
+            seed: yearbookSeed,
             seedIncrement: settings.seedIncrement ?? 3,
             steps: settings.steps,
             cfgScale: settings.cfgScale,
@@ -884,9 +930,38 @@ export default function Yearbook() {
 
                 {extraPanelOpen && (
                   <>
-                    <p className="text-[11px] text-slate-500 leading-relaxed">
-                      Applied to every generation in the run — use for style, lighting, or effect LoRAs.
-                    </p>
+                    {/* Favorites / All tab + model label */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex rounded-md overflow-hidden border border-dark-border text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setExtraTab('favorites')}
+                          className={`px-2.5 py-1 transition-colors ${
+                            extraTab === 'favorites'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-dark-bg text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Favorites
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExtraTab('all')}
+                          className={`px-2.5 py-1 transition-colors ${
+                            extraTab === 'all'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-dark-bg text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          All
+                        </button>
+                      </div>
+                      {activeBaseModel && (
+                        <span className="text-[10px] text-slate-500 truncate max-w-[120px]" title={activeBaseModel}>
+                          {activeBaseModel}
+                        </span>
+                      )}
+                    </div>
 
                     {/* Search */}
                     <div className="relative">
@@ -901,9 +976,9 @@ export default function Yearbook() {
 
                     {filteredExtraLoras.length === 0 ? (
                       <div className="text-center py-6 text-slate-500 text-xs">
-                        {nonCharacterLoras.length === 0
-                          ? 'No non-character LoRAs found.'
-                          : 'No matches.'}
+                        {extraTab === 'favorites'
+                          ? <><p>No favorited style LoRAs{activeBaseModel ? ` for ${activeBaseModel}` : ''}.</p><button type="button" onClick={() => setExtraTab('all')} className="mt-1 underline hover:text-slate-300">Show all</button></>
+                          : 'No style LoRAs found.'}
                       </div>
                     ) : (
                       <ScrollArea className="h-[220px]">
@@ -1003,9 +1078,35 @@ export default function Yearbook() {
                 />
 
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Each character's trigger words are appended automatically before generation, then
-                  stripped before the next character runs. Leave them out of the prompt above.
+                  Each character's trigger words are appended automatically before generation. Leave them out of the prompt above.
                 </p>
+
+                {/* Seed */}
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-slate-400 shrink-0 w-8">Seed</label>
+                  <Input
+                    type="number"
+                    value={yearbookSeed === -1 ? '' : yearbookSeed}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      setYearbookSeed(isNaN(v) ? -1 : v);
+                    }}
+                    placeholder="Random"
+                    className="h-7 text-xs bg-dark-bg border-dark-border flex-1"
+                    disabled={isRunning}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setYearbookSeed(-1)}
+                    disabled={yearbookSeed === -1 || isRunning}
+                    className="h-7 px-2 text-xs text-slate-400 hover:text-white shrink-0"
+                    title="Use a random seed each run"
+                  >
+                    🎲 Random
+                  </Button>
+                </div>
 
                 {/* Run / cancel */}
                 <div className="flex items-center gap-3">
