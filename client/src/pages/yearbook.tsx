@@ -45,7 +45,7 @@ const isCharacterLora = (lora: Model): boolean => {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type ResultStatus = 'pending' | 'running' | 'completed' | 'failed';
+type ResultStatus = 'pending' | 'running' | 'queued' | 'completed' | 'failed';
 
 interface YearbookResult {
   loraId: string;
@@ -56,6 +56,7 @@ interface YearbookResult {
   imageUrl?: string;
   generationId?: string;
   error?: string;
+  startedAt?: number; // ms timestamp — for the card to show "queued" label
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -190,15 +191,16 @@ export default function Yearbook() {
           }
         }, 6000);
 
-        // 5-minute hard timeout
+        // 35-minute hard timeout — matches the server's hard cap so we never
+        // give up before the server does (CivitAI queues can run 15-25 min).
         const timeout = setTimeout(() => {
           clearInterval(pollInterval);
           if (pendingGenIdRef.current === generationId) {
             pendingGenIdRef.current = null;
             resolveGenRef.current = null;
-            resolve({ error: 'Generation timed out after 5 minutes' });
+            resolve({ error: 'Generation timed out — CivitAI queue may be busy. Check your gallery for the result.' });
           }
-        }, 5 * 60 * 1000);
+        }, 35 * 60 * 1000);
 
         // Clean up timeout when resolved by WebSocket
         const originalResolve = resolveGenRef.current;
@@ -292,7 +294,7 @@ export default function Yearbook() {
 
       // Mark as running
       setResults((prev) =>
-        prev.map((r, idx) => (idx === i ? { ...r, status: 'running' } : r))
+        prev.map((r, idx) => (idx === i ? { ...r, status: 'running', startedAt: Date.now() } : r))
       );
 
       // Build prompt: base + trigger words
@@ -677,7 +679,26 @@ export default function Yearbook() {
 
 // ── Result card ──────────────────────────────────────────────────────────────
 
+const QUEUED_LABEL_AFTER_MS = 2 * 60 * 1000; // show "Queued at CivitAI" after 2 min
+
 function ResultCard({ result, index }: { result: YearbookResult; index: number }) {
+  // Flip the label from "Generating…" to "Queued at CivitAI…" once we've been
+  // waiting more than 2 minutes (CivitAI's queue can run 15-25 min under load).
+  const [isQueued, setIsQueued] = useState(false);
+  useEffect(() => {
+    if (result.status !== 'running' || !result.startedAt) {
+      setIsQueued(false);
+      return;
+    }
+    const elapsed = Date.now() - result.startedAt;
+    if (elapsed >= QUEUED_LABEL_AFTER_MS) {
+      setIsQueued(true);
+      return;
+    }
+    const timer = setTimeout(() => setIsQueued(true), QUEUED_LABEL_AFTER_MS - elapsed);
+    return () => clearTimeout(timer);
+  }, [result.status, result.startedAt]);
+
   return (
     <div className="flex flex-col gap-1.5">
       {/* Image area */}
@@ -691,7 +712,16 @@ function ResultCard({ result, index }: { result: YearbookResult; index: number }
         {result.status === 'running' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-purple-400 bg-dark-bg/80">
             <Loader2 className="h-6 w-6 animate-spin" />
-            <span className="text-[10px] text-slate-400">Generating…</span>
+            {isQueued ? (
+              <>
+                <span className="text-[10px] text-amber-400 font-medium">Queued at CivitAI…</span>
+                <span className="text-[9px] text-slate-500 text-center px-2">
+                  Queue can take 15–25 min
+                </span>
+              </>
+            ) : (
+              <span className="text-[10px] text-slate-400">Generating…</span>
+            )}
           </div>
         )}
 
