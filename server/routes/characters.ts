@@ -29,6 +29,7 @@ import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateIm
 
 import { type RouteContext, eq, and } from "./context";
 import { generateCharacterPreviewImage, backfillSharedCharacterPreviews } from "../character-preview-generator";
+import { matchGenerationToCharacter } from "../character-matcher";
 
 export function registerCharactersRoutes(app: Express, ctx: RouteContext) {
   // Character management routes
@@ -88,7 +89,9 @@ export function registerCharactersRoutes(app: Express, ctx: RouteContext) {
 
   // Helper to resolve character image URLs from stored paths to API endpoints
   const resolveCharacterImageUrl = (character: any) => {
-    if (character.imageUrl && character.imageUrl.startsWith('/')) {
+    // Only rewrite object-storage paths (e.g. /bucket/key) to the character-image proxy.
+    // Preserve already-resolved API URLs (e.g. /api/images/:id set by "Set as icon").
+    if (character.imageUrl && character.imageUrl.startsWith('/') && !character.imageUrl.startsWith('/api/')) {
       return { ...character, imageUrl: `/api/character-images/${character.id}` };
     }
     return character;
@@ -382,6 +385,113 @@ export function registerCharactersRoutes(app: Express, ctx: RouteContext) {
     } catch (error) {
       logger.error("Error setting default preset:", error);
       res.status(500).json({ error: "Failed to set default preset" });
+    }
+  });
+
+  // ── Character PATCH (partial update — used for "Set as icon") ──────────────
+  app.patch("/api/characters/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const updates: Record<string, unknown> = {};
+
+      // "Set as icon" path: caller supplies a generation ID; we resolve the
+      // stable /api/images/:id URL server-side instead of trusting a raw blob URL
+      // (blob URLs from CivitAI carry signed expiry tokens and cannot be stored).
+      if (req.body.sourceGenerationId) {
+        const gen = await storage.getGeneration(req.body.sourceGenerationId);
+        if (!gen) return res.status(404).json({ error: 'Generation not found' });
+        if (gen.userId !== userId) return res.status(403).json({ error: 'Not authorized' });
+        if (!gen.imageUrl) return res.status(400).json({ error: 'Generation has no image yet' });
+        // Store the stable server-side image endpoint rather than the transient provider URL
+        updates.imageUrl = `/api/images/${gen.id}`;
+      }
+
+      const allowed = ['name', 'description', 'isPublic', 'isShared'] as const;
+      for (const key of allowed) {
+        if (key in req.body) updates[key] = req.body[key];
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
+      }
+      const updated = await storage.updateCharacter(req.params.id, updates as any, userId);
+      if (!updated) return res.status(404).json({ error: 'Character not found or not authorized' });
+      res.json(resolveCharacterImageUrl(updated));
+    } catch (error) {
+      logger.error('PATCH /api/characters/:id error:', error);
+      res.status(500).json({ error: 'Failed to update character' });
+    }
+  });
+
+  // ── List generations linked to a character ─────────────────────────────────
+  // Intentionally owner-only: linked generations are the owner's private work.
+  // Making a character public does NOT grant others access to the generation gallery.
+  app.get("/api/characters/:id/generations", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const character = await storage.getCharacter(req.params.id);
+      if (!character) return res.status(404).json({ error: 'Character not found' });
+      if (character.userId !== userId) {
+        return res.status(403).json({ error: 'Not authorized' });
+      }
+      const gens = await storage.getImagesForCharacter(req.params.id);
+      res.json({ generations: gens });
+    } catch (error) {
+      logger.error('GET /api/characters/:id/generations error:', error);
+      res.status(500).json({ error: 'Failed to fetch character images' });
+    }
+  });
+
+  // ── Backfill historical generations for a character ────────────────────────
+  // In-progress lock — prevents concurrent runs for the same user
+  const backfillInProgress = new Set<string>();
+
+  app.post("/api/characters/:id/backfill-images", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).claims.sub;
+      const character = await storage.getCharacter(req.params.id);
+      if (!character) return res.status(404).json({ error: 'Character not found' });
+      if (character.userId !== userId) return res.status(403).json({ error: 'Not authorized' });
+
+      const charLoras = character.loras || [];
+      if (!charLoras.length) {
+        return res.json({ linked: 0, message: 'Character has no LoRAs configured — nothing to match' });
+      }
+
+      if (backfillInProgress.has(userId)) {
+        return res.status(429).json({ error: 'A backfill is already running for your account — please wait' });
+      }
+
+      backfillInProgress.add(userId);
+      res.json({ accepted: true, message: 'Backfill started' });
+
+      // Fire-and-forget background job
+      (async () => {
+        try {
+          const allUserGens = await storage.getUserGenerations(userId);
+          const unlinked = allUserGens.filter(
+            (g) => !g.characterId && g.status === 'completed' && g.imageUrl
+          );
+          let linked = 0;
+          for (const gen of unlinked) {
+            const genLoras = (gen.loras as Array<{ id: string; strength: number }> | null) ?? [];
+            const matchedId = await matchGenerationToCharacter(userId, genLoras);
+            if (matchedId === character.id) {
+              await storage.updateGeneration(gen.id, { characterId: character.id });
+              linked++;
+            }
+          }
+          logger.info(`✅ Backfill complete for character ${character.id} ("${character.name}"): ${linked} generation(s) linked`);
+        } catch (err) {
+          logger.error('Backfill error:', err);
+        } finally {
+          backfillInProgress.delete(userId);
+        }
+      })();
+    } catch (error) {
+      backfillInProgress.delete((req.user as any).claims.sub);
+      logger.error('POST /api/characters/:id/backfill-images error:', error);
+      res.status(500).json({ error: 'Failed to start backfill' });
     }
   });
 

@@ -19,6 +19,7 @@ import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
 import { ErrorLogger } from "../error-logger";
+import { matchAndLinkGenerationToCharacter } from "../character-matcher";
 import { insertGenerationSchema, insertFavoriteSchema, insertModelLikeSchema, insertCharacterSchema, insertQualityGroupSchema, insertSavedSceneSchema, insertSavedPromptSchema, insertSignupPromotionSchema, insertCreditPackageSchema, insertCreditTransactionSchema, insertEventSchema, insertEventStepSchema, insertFavoritePromptWordSchema, transformRequestSchema, generations, models } from "@shared/schema";
 import { civitaiOrchestration } from "../civitai-orchestration";
 import { db } from "../db";
@@ -926,6 +927,8 @@ function friendlyGenerationError(raw: string): string {
       if (isFirstImage) {
         // Update original generation with first image
         await storage.updateGenerationStatus(originalGenerationId, "completed", result.blobUrl, result.blobKey);
+        // Auto-link to character based on LoRA match (fire-and-forget, non-fatal)
+        matchAndLinkGenerationToCharacter(originalGenerationId).catch(() => {});
         
         // SEED FIX: Update the seed value from CivitAI result for the first image
         const generation = await storage.getGeneration(originalGenerationId);
@@ -968,6 +971,8 @@ function friendlyGenerationError(raw: string): string {
           });
           
           await storage.updateGenerationStatus(additionalGeneration.id, "completed", result.blobUrl, result.blobKey);
+          // Auto-link to character based on LoRA match (fire-and-forget, non-fatal)
+          matchAndLinkGenerationToCharacter(additionalGeneration.id).catch(() => {});
           
           // CRITICAL FIX: Use the NEW generation ID so each image appears separately in recent gallery
           generationId = additionalGeneration.id;

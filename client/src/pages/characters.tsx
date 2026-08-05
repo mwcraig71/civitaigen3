@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Model, Generation } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertCharacterSchema } from "@shared/schema";
-import { Plus, Edit2, Trash2, Users, Lock, ArrowLeft, Settings, X, Image as ImageIcon, Check } from "lucide-react";
+import { Plus, Edit2, Trash2, Users, Lock, ArrowLeft, Settings, X, Image as ImageIcon, Check, GalleryHorizontal, Star } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import LoRASelector from "@/components/lora-selector";
@@ -104,13 +104,14 @@ function TagsInput({ value, onChange, placeholder, ...props }: {
   );
 }
 
-function CharacterCard({ character, onEdit, onDelete, onSelect, onHide, onToggleShared, canEdit, models }: {
+function CharacterCard({ character, onEdit, onDelete, onSelect, onHide, onToggleShared, onViewImages, canEdit, models }: {
   character: Character;
   onEdit?: (character: Character) => void;
   onDelete?: (id: string) => void;
   onSelect: (character: Character) => void;
   onHide?: (id: string) => void;
   onToggleShared?: (id: string, isShared: boolean) => void;
+  onViewImages?: (character: Character) => void;
   canEdit: boolean;
   models: Model[];
 }) {
@@ -306,7 +307,7 @@ function CharacterCard({ character, onEdit, onDelete, onSelect, onHide, onToggle
           </div>
         )}
 
-        <div className="pt-3 border-t">
+        <div className="pt-3 border-t space-y-2">
           <Button 
             onClick={() => onSelect({...character, age: characterAge})}
             className="w-full"
@@ -317,9 +318,149 @@ function CharacterCard({ character, onEdit, onDelete, onSelect, onHide, onToggle
             <Check className="h-4 w-4 mr-2" />
             Select Character
           </Button>
+          {onViewImages && (
+            <Button
+              onClick={() => onViewImages(character)}
+              className="w-full"
+              variant="outline"
+              size="sm"
+              data-testid={`button-view-images-${character.id}`}
+            >
+              <GalleryHorizontal className="h-4 w-4 mr-2" />
+              View Images
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ── Character Gallery: all generations linked to a character ─────────────────
+
+function CharacterGallery({ character, open, onClose }: {
+  character: Character;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const backfillFiredRef = useRef(false);
+
+  const {
+    data,
+    isLoading,
+    refetch,
+  } = useQuery<{ generations: Generation[] }>({
+    queryKey: [`/api/characters/${character.id}/generations`],
+    enabled: open,
+  });
+
+  const generations = data?.generations ?? [];
+
+  // When the gallery opens and comes back empty, fire the backfill once and refetch.
+  useEffect(() => {
+    if (!open) { backfillFiredRef.current = false; return; }
+    if (isLoading) return;
+    if (generations.length > 0) return;
+    if (backfillFiredRef.current) return;
+
+    backfillFiredRef.current = true;
+    fetch(`/api/characters/${character.id}/backfill-images`, { method: 'POST' })
+      .then(() => setTimeout(() => refetch(), 1500))
+      .catch(() => { /* non-fatal */ });
+  }, [open, isLoading, generations.length, character.id, refetch]);
+
+  // Set as icon mutation — sends the generation ID so the server resolves a
+  // stable /api/images/:id URL instead of storing a transient provider blob URL.
+  const setIconMutation = useMutation({
+    mutationFn: async (generationId: string) => {
+      const res = await fetch(`/api/characters/${character.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceGenerationId: generationId }),
+      });
+      if (!res.ok) throw new Error('Failed to update icon');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/characters'] });
+      toast({ title: '✓ Character icon updated' });
+    },
+    onError: () => {
+      toast({ title: 'Failed to update icon', variant: 'destructive' });
+    },
+  });
+
+  const completedGens = generations.filter((g) => g.status === 'completed' && g.imageUrl);
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <GalleryHorizontal className="h-4 w-4 text-purple-400" />
+            Images of {character.name}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-1">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="aspect-square bg-muted animate-pulse rounded-lg" />
+              ))}
+            </div>
+          ) : completedGens.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+              <GalleryHorizontal className="h-10 w-10 opacity-40" />
+              <p className="text-sm">No linked images yet</p>
+              <p className="text-xs text-center max-w-xs">
+                Images created with this character's LoRA combination will appear here automatically. Run a generation to get started.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-1">
+              {completedGens.map((gen) => (
+                <div key={gen.id} className="group relative aspect-square overflow-hidden rounded-lg border border-border">
+                  <img
+                    src={gen.imageUrl!}
+                    alt={gen.prompt}
+                    className="w-full h-full object-cover"
+                    title={gen.prompt}
+                  />
+                  {/* Hover overlay */}
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-end pb-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIconMutation.mutate(gen.id)}
+                      disabled={setIconMutation.isPending}
+                      className="flex items-center gap-1.5 bg-yellow-500 hover:bg-yellow-400 text-black text-xs font-semibold px-3 py-1.5 rounded-full transition-colors"
+                      title="Use as character icon"
+                    >
+                      <Star className="h-3 w-3" />
+                      Set as icon
+                    </button>
+                    <p className="text-[10px] text-white/70 px-2 text-center line-clamp-2">{gen.prompt}</p>
+                  </div>
+                  {/* Active icon indicator — compare against the stable URL format we store */}
+                  {character.imageUrl === `/api/images/${gen.id}` && (
+                    <div className="absolute top-1.5 right-1.5 bg-yellow-500 rounded-full p-0.5">
+                      <Star className="h-3 w-3 text-black fill-black" />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t pt-3 flex justify-between items-center text-xs text-muted-foreground">
+          <span>{completedGens.length} image{completedGens.length !== 1 ? 's' : ''} linked to this character</span>
+          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -970,6 +1111,7 @@ export default function Characters() {
   const [selectedLibrary, setSelectedLibrary] = useState<"civitai" | "user" | "shared">("user");
   const [selectedCategory, setSelectedCategory] = useState("User Characters/Female");
   const [hiddenCivitAI, setHiddenCivitAI] = useState<string[]>([]);
+  const [galleryCharacter, setGalleryCharacter] = useState<Character | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
@@ -1273,12 +1415,22 @@ export default function Characters() {
               onDelete={selectedLibrary === "user" ? handleDelete : undefined}
               onSelect={handleSelect}
               onHide={selectedLibrary === "civitai" ? (id) => setHiddenCivitAI(prev => [...prev, id]) : undefined}
+              onViewImages={setGalleryCharacter}
               onToggleShared={selectedLibrary === "user" ? handleToggleShared : undefined}
               canEdit={selectedLibrary === "user"}
               models={models}
             />
           ))}
         </div>
+      )}
+
+      {/* Character image gallery dialog */}
+      {galleryCharacter && (
+        <CharacterGallery
+          character={galleryCharacter}
+          open={!!galleryCharacter}
+          onClose={() => setGalleryCharacter(null)}
+        />
       )}
     </div>
   );
