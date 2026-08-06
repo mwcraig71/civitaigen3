@@ -985,7 +985,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getModelByArn(arn: string): Promise<Model | undefined> {
-    const [model] = await db.select().from(models).where(eq(models.arn, arn));
+    // Writes lowercase the ARN (AIR URNs are lowercase by spec) but legacy rows
+    // may carry mixed case. Match case-insensitively so dedup can't be bypassed
+    // by casing alone. Pair with the lower(arn) index created in server/index.ts.
+    const [model] = await db
+      .select()
+      .from(models)
+      .where(sql`lower(${models.arn}) = ${arn.trim().toLowerCase()}`);
     return model || undefined;
   }
 

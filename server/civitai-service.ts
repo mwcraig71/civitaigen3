@@ -879,6 +879,34 @@ export class CivitAIService {
       const parentModel = await modelRes.json();
 
       const modelType = (parentModel.type || 'checkpoint').toLowerCase();
+
+      // The ARN's TYPE segment drives generation routing — a `diffusionmodel` AIR
+      // goes down the comfy path with the weights attached, a `checkpoint` AIR does
+      // not. Admins routinely paste the wrong segment, and the old code stored
+      // whatever was supplied verbatim, so the mistake only surfaced at generation
+      // time (or worse, silently rendered a different model). Derive it from the
+      // version's actual file types instead of trusting the input.
+      const versionFiles: any[] = Array.isArray(version.files) ? version.files : [];
+      const hasDiffusionModelFile = versionFiles.some(
+        (f: any) => String(f?.type || '').toLowerCase().replace(/\s+/g, '') === 'diffusionmodel'
+      );
+      const derivedTypeSegment = hasDiffusionModelFile
+        ? 'diffusionmodel'
+        : modelType === 'lora' || modelType === 'locon' || modelType === 'lycoris'
+        ? 'lora'
+        : 'checkpoint';
+      const suppliedTypeSegment = sourceArn.match(/^urn:air:[^:]+:([^:]+):/)?.[1] ?? null;
+      const correctedArn = sourceArn.replace(
+        /^(urn:air:[^:]+:)[^:]+(:)/,
+        `$1${derivedTypeSegment}$2`
+      );
+      if (suppliedTypeSegment && suppliedTypeSegment !== derivedTypeSegment) {
+        logger.warn(
+          `🔧 ARN type segment corrected: "${suppliedTypeSegment}" → "${derivedTypeSegment}" ` +
+          `for version ${versionId} (files: ${versionFiles.map((f: any) => f?.type).join(', ') || 'none'})`
+        );
+      }
+
       const coverImage =
         (version.images as any[])?.find((img: any) => !img.nsfw && img.type === 'image')?.url ??
         null;
@@ -906,7 +934,7 @@ export class CivitAIService {
         tags: parentModel.tags || null,
         civitaiId: parentModel.id.toString(),
         modelVersion: version.name || 'v1',
-        arn: sourceArn, // preserve the exact ARN the admin supplied
+        arn: correctedArn, // type segment derived from the version's file types
         imageUrl: coverImage,
         strengthMin: -1000,
         strengthMax: 1000,

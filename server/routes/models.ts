@@ -165,7 +165,9 @@ export function registerModelsRoutes(app: Express, ctx: RouteContext) {
   });
 
   // Import a specific model version by its full AIR URN
-  // e.g. POST /api/models/import-arn  { "arn": "urn:air:krea2:checkpoint:civitai:2762538@3187539" }
+  // e.g. POST /api/models/import-arn  { "arn": "urn:air:krea2:diffusionmodel:civitai:2762538@3187539" }
+  // The TYPE segment is re-derived server-side from the version's file types, so a
+  // wrong segment is corrected rather than stored and failed at generation time.
   app.post("/api/models/import-arn", requireAdmin, async (req, res) => {
     try {
       const { arn } = req.body as { arn?: string };
@@ -203,6 +205,19 @@ export function registerModelsRoutes(app: Express, ctx: RouteContext) {
         return res.status(404).json({
           message: "Model version not found on CivitAI. Check the ARN and try again.",
         });
+      }
+
+      // fetchModelVersion may have corrected the ARN's type segment, so the dedup
+      // check above (run against the supplied ARN) can miss. Re-check against the
+      // canonical ARN we are about to store, or the unique index throws a 500.
+      if (modelData.arn && modelData.arn !== canonicalArn) {
+        const existingByCorrected = await storage.getModelByArn(modelData.arn);
+        if (existingByCorrected) {
+          return res.status(409).json({
+            message: `This model version already exists (imported as ${modelData.arn})`,
+            model: existingByCorrected,
+          });
+        }
       }
 
       // Persist

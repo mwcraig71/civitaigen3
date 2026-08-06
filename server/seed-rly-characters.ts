@@ -94,9 +94,11 @@ export async function seedRlyKrea2Characters(): Promise<void> {
           isPublic: true,
           isShared: true,
           baseModel: turbo.id,
-          // KREA 2 Turbo tier sweet spot: ~10 steps, CFG ~1.5 (cfgScale stored as int*10)
-          steps: 10,
-          cfgScale: 15,
+          // KREA 2 Turbo is distilled and runs without classifier-free guidance.
+          // CFG 1.5 costs the same two forward passes per step as CFG 7 with no
+          // quality gain, so pin CFG to 1.0 (cfgScale stored as int*10).
+          steps: 8,
+          cfgScale: 10,
           loras: [{ id: lora.id, strength: 1.0 }],
         }).returning({ id: characters.id, name: characters.name });
         seededLoraIds.add(lora.id);

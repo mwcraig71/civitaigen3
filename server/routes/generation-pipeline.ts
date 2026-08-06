@@ -402,6 +402,80 @@ function friendlyGenerationError(raw: string): string {
         getJobStatus: (t: string, k?: string) => civitaiOrchestration.getWorkflowStatus(t, k),
       };
 
+      // ── Batched submit (opt-in) ──────────────────────────────────────────────
+      // One workflow with quantity=N instead of N workflows with quantity=1.
+      // N separate workflows can land on N different Comfy workers, each of which
+      // loads the full checkpoint from cold before doing a few seconds of work —
+      // on a 12-25 GB Krea 2 diffusion model that load dominates wall time. The
+      // `await` inside the per-image loop also serialized submission itself.
+      //
+      // Gated because it changes seed semantics: with one workflow the engine
+      // assigns seeds per image and we persist them from `result.seed`, rather
+      // than pinning one seed per submission. Enable with KREA2_BATCH_SUBMIT=1
+      // once verified that the comfy engine returns distinct seeds per blob.
+      //
+      // Safe with the existing poller: BatchPoller already iterates job.result,
+      // dedupes on blobKey via processedImages, and gates completion on every
+      // returned blob being processed. batchTracker keys on generationId (not
+      // token) with totalImages=quantity, so counting is unaffected.
+      const batchSubmitEnabled = process.env.KREA2_BATCH_SUBMIT === "1";
+      if (batchSubmitEnabled && quantity > 1) {
+        const batchSeed = userPinnedSeed ? (baseSeed as number) % 2147483647 : undefined;
+        const civitaiRequest = {
+          model: model.arn,
+          baseModel: model.baseModel || undefined,
+          params: {
+            prompt: safePrompt,
+            negativePrompt: safeNeg,
+            width: generationData.width,
+            height: generationData.height,
+            steps: generationData.steps,
+            cfgScale: generationData.cfgScale / 10,
+            scheduler: generationData.scheduler || "Euler",
+            clipSkip: generationData.clipSkip || 2,
+            // Metadata only — processIndividualImage persists each image's seed
+            // from `result.seed`, never from here. -1 marks "engine-assigned".
+            seed: batchSeed ?? -1,
+            loras: lorasWithArns,
+          },
+          generationType: generationData.generationType || "txt2img",
+        };
+
+        logger.info(`🚀 Submitting ONE workflow for all ${quantity} images (KREA2_BATCH_SUBMIT=1)`);
+        const submit = await civitaiOrchestration.submitTxt2Img(
+          {
+            prompt: safePrompt,
+            negativePrompt: safeNeg,
+            modelArn: model.arn,
+            baseModel: model.baseModel || "",
+            modelName: model.name,
+            width: generationData.width,
+            height: generationData.height,
+            steps: generationData.steps,
+            cfgScale: generationData.cfgScale / 10,
+            scheduler: generationData.scheduler || "Euler",
+            clipSkip: generationData.clipSkip || 2,
+            ...(batchSeed !== undefined ? { seed: batchSeed } : {}),
+            quantity,
+            loras: lorasWithArns,
+            aspectRatio: generationData.aspectRatio,
+            creativity: generationData.creativity,
+          },
+          userApiKey,
+        );
+        logger.info(`✅ Batch of ${quantity} submitted with workflow token: ${submit.token}`);
+
+        await storage.updateGenerationStatus(generationId, "processing", undefined, submit.token);
+        broadcastToUser(userId, {
+          type: "generation_update",
+          generationId,
+          status: "processing",
+          progress: 10,
+        });
+        pollCivitAIJob(submit.token, generationId, userId, pollerService, civitaiRequest, userApiKey);
+        return;
+      }
+
       // Submit individual requests for each image
       for (let i = 0; i < quantity; i++) {
         // Each image gets a fully independent random seed unless the user pinned one
