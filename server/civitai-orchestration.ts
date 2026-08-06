@@ -542,18 +542,33 @@ export class CivitAIOrchestrationService {
    */
   async submitTxt2Img(input: Txt2ImgInput, userApiKey?: string): Promise<OrchestrationSubmitResult> {
     // Krea 2 routes to one of two paths:
-    //  • FAL  (engine:"fal")   — base Krea 2, no LoRAs, uses aspectRatio+creativity
-    //  • Comfy (engine:"comfy") — community checkpoints with LoRAs (rly*, turbo tiers)
-    // Routing signal: presence of LoRAs → comfy; otherwise → FAL.
+    //  • FAL  (engine:"fal")   — Civitai-hosted stock Krea 2 (Large/Medium). Closed
+    //    weights, no LoRAs, no width/height; uses aspectRatio + creativity.
+    //  • Comfy (engine:"comfy") — community open-weight checkpoints (Raw/Turbo and
+    //    finetunes of them). Accepts a diffusionModel AIR + LoRAs.
     const bmLower = (input.baseModel || "").toLowerCase();
     if (bmLower.includes("krea")) {
-      // Routing rules:
-      //  • "Krea 2 Turbo" baseModel → always comfy (community checkpoint, supports LoRAs)
-      //  • Base "KREA 2" + LoRAs selected → comfy (FAL endpoint has no LoRA support)
-      //  • Base "KREA 2" + no LoRAs → FAL (fast path with aspectRatio/creativity)
-      const isTurbo = bmLower.includes("turbo");
+      // The AIR's TYPE segment is the authoritative routing signal. Community
+      // open-weight checkpoints are `urn:air:krea2:diffusionmodel:...`; stock
+      // Civitai-hosted Krea 2 is `...:checkpoint:...`.
+      //
+      // Do NOT route on `baseModel` alone — CivitAI reports baseModel as plain
+      // "Krea 2" for community turbo finetunes, so a community checkpoint
+      // generated without LoRAs used to fall through to FAL, silently discarding
+      // the diffusionModel AIR and rendering stock Krea 2 while still billing Buzz.
+      const airType = input.modelArn?.match(/^urn:air:[^:]+:([^:]+):/)?.[1]?.toLowerCase();
+      const isDiffusionModelAir = airType === "diffusionmodel";
+      // Tier keywords can live in either the checkpoint display name or the
+      // baseModel string depending on how the model row was imported.
+      const nameAndBase = `${input.modelName || ""} ${input.baseModel || ""}`.toLowerCase();
+      const isTurbo = nameAndBase.includes("turbo");
       const hasLoras = (input.loras ?? []).length > 0;
-      if (isTurbo || hasLoras) {
+      const useComfy = isDiffusionModelAir || isTurbo || hasLoras;
+      logger.info(
+        `🧭 Krea 2 routing: ${useComfy ? "comfy" : "fal"} ` +
+        `(airType=${airType ?? "none"} turbo=${isTurbo} loras=${(input.loras ?? []).length} arn=${input.modelArn})`
+      );
+      if (useComfy) {
         return this.submitKrea2ComfyTxt2Img(input, userApiKey);
       }
       return this.submitKrea2FalTxt2Img(input, userApiKey);
@@ -697,17 +712,41 @@ export class CivitAIOrchestrationService {
     input: Txt2ImgInput,
     userApiKey?: string
   ): Promise<OrchestrationSubmitResult> {
-    const nmLower = (input.modelName || "").toLowerCase();
+    // Read the tier keyword from name AND baseModel — imports via /api/models/import-arn
+    // name the row "<model> (<version>)" while baseModel stays plain "Krea 2".
+    const nmLower = `${input.modelName || ""} ${input.baseModel || ""}`.toLowerCase();
     const isTurbo = nmLower.includes("turbo");
     const isLarge = nmLower.includes("large");
     const tier = isTurbo ? "turbo" : isLarge ? "large" : "medium";
 
+    // Turbo checkpoints are distilled to run WITHOUT classifier-free guidance.
+    // Any cfgScale > 1.0 doubles the forward passes per step for no quality gain,
+    // so it is pinned rather than clamped.
+    //
+    // Steps need the same treatment for a subtler reason: `input.steps` is never
+    // undefined (the schema default is 28), so a plain `?? 8` fallback is dead
+    // code and a plain clamp lands every turbo job on the 12-step ceiling. A
+    // value above the turbo ceiling is the generic default leaking through, not
+    // a deliberate choice, so fall back to the turbo default instead of clamping
+    // to it. A value inside the band IS deliberate and is respected.
+    const TURBO_DEFAULT_STEPS = 8;
+    const TURBO_MAX_STEPS = 12;
+    const turboSteps =
+      input.steps !== undefined && input.steps > 0 && input.steps <= TURBO_MAX_STEPS
+        ? Math.max(4, input.steps)
+        : TURBO_DEFAULT_STEPS;
     const steps = isTurbo
-      ? Math.max(1, Math.min(input.steps ?? 8, 12))
+      ? turboSteps
       : Math.max(1, Math.min(input.steps ?? 28, 100));
     const cfgScale = isTurbo
-      ? Math.max(0, Math.min(input.cfgScale ?? 1, 2))
+      ? 1
       : Math.max(1, Math.min(input.cfgScale ?? 4, 10));
+    if (isTurbo && input.steps !== undefined && input.steps !== steps) {
+      logger.info(`⚙️ Krea 2 turbo: steps ${input.steps} → ${steps} (distilled model target is ${TURBO_DEFAULT_STEPS})`);
+    }
+    if (isTurbo && input.cfgScale !== undefined && input.cfgScale > 1) {
+      logger.info(`⚙️ Krea 2 turbo: cfgScale ${input.cfgScale} → 1 (distilled model runs without CFG)`);
+    }
     const width = roundDimensionTo16(input.width, 512, 2048);
     const height = roundDimensionTo16(input.height, 512, 2048);
 
@@ -730,14 +769,22 @@ export class CivitAIOrchestrationService {
       steps,
       cfgScale,
       sampler: "euler",
-      scheduler: "simple",
+      // The v4 checkpoint notes recommend euler+beta or er_sde+simple over the
+      // v3-era euler+simple. NOT changed by default: "beta" is not enumerated in
+      // any CivitAI comfy-step documentation, and an unaccepted scheduler value
+      // 400s every turbo generation. Set KREA2_TURBO_SCHEDULER=beta to try it,
+      // confirm one image returns, then make it the default.
+      scheduler: isTurbo ? (process.env.KREA2_TURBO_SCHEDULER || "simple") : "simple",
       quantity: Math.max(1, Math.min(input.quantity ?? 1, 12)),
       loras,
       diffusionModel: rewriteArnEcosystem(input.modelArn, "krea2"),
     };
     if (input.seed && input.seed > 0) stepInput.seed = input.seed;
 
-    logger.info(`🎨 Krea 2 comfy path: tier=${tier} steps=${steps} cfg=${cfgScale} loras=${Object.keys(loras).length}`);
+    logger.info(
+      `🎨 Krea 2 comfy path: tier=${tier} steps=${steps} cfg=${cfgScale} ` +
+      `qty=${stepInput.quantity} loras=${Object.keys(loras).length} model=${stepInput.diffusionModel}`
+    );
     return this.submitWorkflow(
       {
         workflowTemplate: "txt2img",

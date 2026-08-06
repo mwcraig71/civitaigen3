@@ -131,16 +131,47 @@ app.use((req, res, next) => {
     await pool.query(`
       ALTER TABLE "models" DROP CONSTRAINT IF EXISTS "models_civitai_id_unique"
     `);
-    // Add a partial unique index on arn (NULL arns are excluded so legacy rows
-    // without an ARN don't conflict with each other).
+    // Migrate the ARN uniqueness guarantee from ("arn") to (lower("arn")).
+    //
+    // ORDER MATTERS. A prior deploy created "idx_models_arn_unique" over the raw
+    // column. CREATE UNIQUE INDEX IF NOT EXISTS matches by NAME, not definition,
+    // so recreating it as an expression index without dropping first is a silent
+    // no-op — the old raw-column index survives and case-variant duplicates stay
+    // possible. Drop it explicitly, then normalize, then rebuild.
+    // Anything unguarded in this block reaches the outer catch, which calls
+    // process.exit(1) — so the ARN index migration is guarded end to end. Worst
+    // case it logs and skips; the app still starts.
+    try {
+      await pool.query(`DROP INDEX IF EXISTS "idx_models_arn_unique"`);
+    } catch (dropErr) {
+      logger.warn("⚠️ Could not drop idx_models_arn_unique (non-fatal):", dropErr);
+    }
+
+    // Normalize legacy ARN casing. AIR URNs are lowercase by spec and the import
+    // path lowercases on write, so a mixed-case legacy row would otherwise escape
+    // both the dedup lookup and the unique index. Guarded independently: if two
+    // rows collide once folded to lowercase, this UPDATE raises a unique
+    // violation, and an unguarded failure here would abort the whole schema check.
+    try {
+      const norm = await pool.query(`
+        UPDATE "models" SET "arn" = lower("arn")
+        WHERE "arn" IS NOT NULL AND "arn" <> lower("arn")
+      `);
+      if (norm.rowCount) logger.info(`🔧 Lowercased ${norm.rowCount} legacy ARN(s)`);
+    } catch (normErr) {
+      logger.warn("⚠️ Could not normalize ARN casing (non-fatal):", normErr);
+    }
+
+    // Add a partial unique index on lower(arn) (NULL arns are excluded so legacy
+    // rows without an ARN don't conflict with each other).
     // Guard: if there are somehow duplicate non-null ARNs in an existing database,
     // log them and skip index creation rather than crashing the server.
     try {
       const dupeCheck = await pool.query(`
-        SELECT "arn", COUNT(*) AS cnt
+        SELECT lower("arn") AS arn, COUNT(*) AS cnt
         FROM "models"
         WHERE "arn" IS NOT NULL
-        GROUP BY "arn"
+        GROUP BY lower("arn")
         HAVING COUNT(*) > 1
       `);
       if (dupeCheck.rows.length > 0) {
@@ -151,7 +182,7 @@ app.use((req, res, next) => {
       } else {
         await pool.query(`
           CREATE UNIQUE INDEX IF NOT EXISTS "idx_models_arn_unique"
-            ON "models" ("arn")
+            ON "models" (lower("arn"))
             WHERE "arn" IS NOT NULL
         `);
       }
