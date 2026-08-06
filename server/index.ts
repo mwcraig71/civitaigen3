@@ -126,6 +126,38 @@ app.use((req, res, next) => {
   try {
     logger.info("Checking database schema...");
     await pool.query(`ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "lora_category" text`);
+    // Drop the base-model-level unique constraint so multiple versions of the same
+    // model can coexist. Deduplication now uses the ARN (which encodes version ID).
+    await pool.query(`
+      ALTER TABLE "models" DROP CONSTRAINT IF EXISTS "models_civitai_id_unique"
+    `);
+    // Add a partial unique index on arn (NULL arns are excluded so legacy rows
+    // without an ARN don't conflict with each other).
+    // Guard: if there are somehow duplicate non-null ARNs in an existing database,
+    // log them and skip index creation rather than crashing the server.
+    try {
+      const dupeCheck = await pool.query(`
+        SELECT "arn", COUNT(*) AS cnt
+        FROM "models"
+        WHERE "arn" IS NOT NULL
+        GROUP BY "arn"
+        HAVING COUNT(*) > 1
+      `);
+      if (dupeCheck.rows.length > 0) {
+        logger.warn(
+          `⚠️ Skipping idx_models_arn_unique — found ${dupeCheck.rows.length} duplicate ARN(s): ` +
+          dupeCheck.rows.map((r: any) => `${r.arn} (${r.cnt}×)`).join(", ")
+        );
+      } else {
+        await pool.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS "idx_models_arn_unique"
+            ON "models" ("arn")
+            WHERE "arn" IS NOT NULL
+        `);
+      }
+    } catch (idxErr) {
+      logger.warn("⚠️ Could not create idx_models_arn_unique (non-fatal):", idxErr);
+    }
     logger.info("Database schema check complete.");
   } catch (err) {
     logger.error("Database schema check failed:", err);

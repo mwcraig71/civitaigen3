@@ -164,6 +164,78 @@ export function registerModelsRoutes(app: Express, ctx: RouteContext) {
     }
   });
 
+  // Import a specific model version by its full AIR URN
+  // e.g. POST /api/models/import-arn  { "arn": "urn:air:krea2:checkpoint:civitai:2762538@3187539" }
+  app.post("/api/models/import-arn", requireAdmin, async (req, res) => {
+    try {
+      const { arn } = req.body as { arn?: string };
+      if (!arn || typeof arn !== "string") {
+        return res.status(400).json({ message: "Missing required field: arn" });
+      }
+
+      // Normalize to lowercase so case variants of the same URN are treated as identical
+      // (AIR URN spec uses lowercase; CivitAI docs consistently use lowercase)
+      const canonicalArn = arn.trim().toLowerCase();
+
+      // Parse the ARN — format: urn:air:<base>:<type>:civitai:<modelId>@<versionId>
+      const arnPattern = /^urn:air:[^:]+:[^:]+:civitai:(\d+)@(\d+)$/;
+      const match = canonicalArn.match(arnPattern);
+      if (!match) {
+        return res.status(400).json({
+          message:
+            "Invalid ARN format. Expected: urn:air:<base>:<type>:civitai:<modelId>@<versionId>",
+        });
+      }
+      const versionId = parseInt(match[2], 10);
+
+      // Dedup by canonical ARN — same version cannot be imported twice
+      const existingByArn = await storage.getModelByArn(canonicalArn);
+      if (existingByArn) {
+        return res.status(409).json({
+          message: "This exact model version already exists",
+          model: existingByArn,
+        });
+      }
+
+      // Fetch the specific version from CivitAI (passes canonicalArn so stored ARN is always lowercase)
+      const modelData = await civitaiService.fetchModelVersion(versionId, canonicalArn);
+      if (!modelData) {
+        return res.status(404).json({
+          message: "Model version not found on CivitAI. Check the ARN and try again.",
+        });
+      }
+
+      // Persist
+      const savedModel = await storage.createModel({
+        name: modelData.name,
+        description: modelData.description,
+        type: modelData.type,
+        baseModel: modelData.baseModel,
+        rating: modelData.rating,
+        downloads: modelData.downloads,
+        civitaiId: modelData.civitaiId,
+        modelVersion: modelData.modelVersion,
+        arn: modelData.arn,
+        imageUrl: modelData.imageUrl,
+        strengthMin: modelData.strengthMin,
+        strengthMax: modelData.strengthMax,
+        activationWords: modelData.activationWords,
+      });
+
+      logger.info(`✅ Imported model version via ARN: ${savedModel.name} (${arn})`);
+      responseCache.invalidate("/api/models");
+      responseCache.invalidate("/api/models/popular");
+
+      return res.status(201).json({
+        message: `Successfully imported "${savedModel.name}"`,
+        model: savedModel,
+      });
+    } catch (error: any) {
+      logger.error("Error importing model by ARN:", error);
+      return res.status(500).json({ message: error.message || "Failed to import model" });
+    }
+  });
+
   // Download specific model by CivitAI ID
   app.post("/api/models/download/:modelId", async (req, res) => {
     try {
@@ -176,21 +248,24 @@ export function registerModelsRoutes(app: Express, ctx: RouteContext) {
       
       logger.info(`Downloading specific model from CivitAI: ${civitaiModelId}`);
       
-      // Check if model already exists
-      const existingModel = await storage.getModelByCivitaiId(civitaiModelId.toString());
+      // Fetch latest version first so we can deduplicate by exact ARN
+      // (the base civitaiId alone is no longer unique — multiple versions can coexist)
+      const modelData = await civitaiService.fetchSpecificModel(civitaiModelId);
+      if (!modelData) {
+        return res.status(404).json({ message: "Model not found on CivitAI. Please check the model ID." });
+      }
+
+      // Check by ARN (encodes version ID) so re-importing the same version is blocked
+      // while a different version of the same base model is permitted
+      const existingModel = modelData.arn
+        ? await storage.getModelByArn(modelData.arn)
+        : await storage.getModelByCivitaiId(civitaiModelId.toString());
       
       if (existingModel) {
         return res.status(409).json({ 
-          message: "Model already exists in your collection",
+          message: "This model version already exists in your collection",
           model: existingModel
         });
-      }
-      
-      // Fetch the specific model from CivitAI
-      const modelData = await civitaiService.fetchSpecificModel(civitaiModelId);
-      
-      if (!modelData) {
-        return res.status(404).json({ message: "Model not found on CivitAI. Please check the model ID." });
       }
       
       // Save the model to storage

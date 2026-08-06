@@ -94,7 +94,7 @@ export const models = pgTable("models", {
   downloads: integer("downloads").default(0),
   likes: integer("likes").default(0),
   views: integer("views").default(0),
-  civitaiId: text("civitai_id").unique(),
+  civitaiId: text("civitai_id"),  // unique constraint now on arn (partial) — see migration in server/index.ts
   modelVersion: text("model_version"),
   arn: text("arn"), // AI Resource Identifier
   imageUrl: text("image_url"), // Cover image from CivitAI

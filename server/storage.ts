@@ -49,6 +49,7 @@ export interface IStorage {
   getModel(id: string): Promise<Model | undefined>;
   getModelById(id: string): Promise<Model | undefined>;
   getModelByCivitaiId(civitaiId: string): Promise<Model | undefined>;
+  getModelByArn(arn: string): Promise<Model | undefined>;
   getAllModels(): Promise<Model[]>;
   getPopularModels(): Promise<Model[]>;
   createModel(model: InsertModel): Promise<Model>;
@@ -980,6 +981,11 @@ export class DatabaseStorage implements IStorage {
 
   async getModelByCivitaiId(civitaiId: string): Promise<Model | undefined> {
     const [model] = await db.select().from(models).where(eq(models.civitaiId, civitaiId));
+    return model || undefined;
+  }
+
+  async getModelByArn(arn: string): Promise<Model | undefined> {
+    const [model] = await db.select().from(models).where(eq(models.arn, arn));
     return model || undefined;
   }
 

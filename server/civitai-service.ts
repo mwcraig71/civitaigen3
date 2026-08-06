@@ -826,6 +826,106 @@ export class CivitAIService {
     }
   }
 
+  /**
+   * Fetch a specific model version by its CivitAI version ID and assemble a
+   * Model record using the caller-supplied AIR URN verbatim. This lets admins
+   * add any historic version of a model, not just the latest.
+   *
+   * CivitAI version endpoint: GET /v1/model-versions/{versionId}
+   * Returns: { id, modelId, name, baseModel, trainedWords, images, … }
+   */
+  async fetchModelVersion(versionId: number, sourceArn: string): Promise<Model | null> {
+    try {
+      logger.info(`Fetching model version ${versionId} from CivitAI`);
+
+      // Step 1 — fetch the version record directly
+      const versionUrl = `${this.baseUrl}/model-versions/${versionId}`;
+      const versionRes = await fetch(versionUrl, {
+        headers: {
+          'User-Agent': 'CiviVerse-App/1.0',
+          ...(this.defaultApiKey ? { 'Authorization': `Bearer ${this.defaultApiKey}` } : {}),
+        },
+      });
+      if (!versionRes.ok) {
+        if (versionRes.status === 404) return null;
+        throw new Error(`model-versions endpoint HTTP ${versionRes.status}`);
+      }
+      const version = await versionRes.json();
+
+      // Parse the modelId that the caller declared in the ARN and cross-check it
+      // against what CivitAI actually returned for this versionId.  A mismatch means
+      // the ARN is semantically invalid (e.g. a real versionId but for a different model).
+      const arnModelIdMatch = sourceArn.match(/civitai:(\d+)@/);
+      const declaredModelId = arnModelIdMatch ? arnModelIdMatch[1] : null;
+      if (!declaredModelId || String(version.modelId) !== declaredModelId) {
+        logger.warn(
+          `ARN model ID mismatch: ARN says ${declaredModelId} but version ${versionId} belongs to model ${version.modelId}`
+        );
+        return null; // caller will receive 404 — "not found at this ARN"
+      }
+
+      // Step 2 — fetch the parent model record (for name, type, stats, tags)
+      const modelUrl = `${this.baseUrl}/models/${version.modelId}`;
+      const modelRes = await fetch(modelUrl, {
+        headers: {
+          'User-Agent': 'CiviVerse-App/1.0',
+          ...(this.defaultApiKey ? { 'Authorization': `Bearer ${this.defaultApiKey}` } : {}),
+        },
+      });
+      if (!modelRes.ok) {
+        if (modelRes.status === 404) return null;
+        throw new Error(`models endpoint HTTP ${modelRes.status}`);
+      }
+      const parentModel = await modelRes.json();
+
+      const modelType = (parentModel.type || 'checkpoint').toLowerCase();
+      const coverImage =
+        (version.images as any[])?.find((img: any) => !img.nsfw && img.type === 'image')?.url ??
+        null;
+      const activationWords: string[] =
+        (version.trainedWords as string[]) ?? [];
+
+      logger.info(
+        `✅ Fetched version ${versionId}: "${parentModel.name} (${version.name})" [${modelType}]`
+      );
+
+      return {
+        id: `civitai-${parentModel.id}`, // transient — replaced by UUID in createModel
+        name: `${parentModel.name} (${version.name})`,
+        description: parentModel.description || null,
+        status: 'active',
+        type: modelType,
+        baseModel: version.baseModel || null,
+        rating: parentModel.stats?.rating
+          ? Math.round(parentModel.stats.rating * 10)
+          : null,
+        downloads: parentModel.stats?.downloadCount || null,
+        likes: null,
+        views: null,
+        creatorId: null,
+        tags: parentModel.tags || null,
+        civitaiId: parentModel.id.toString(),
+        modelVersion: version.name || 'v1',
+        arn: sourceArn, // preserve the exact ARN the admin supplied
+        imageUrl: coverImage,
+        strengthMin: -1000,
+        strengthMax: 1000,
+        activationWords: activationWords.length > 0 ? activationWords : null,
+        isNSFW: false,
+        featured: false,
+        allowCommercialUse: null,
+        allowDerivatives: null,
+        allowDifferentLicense: null,
+        loraCategory: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as unknown as Model;
+    } catch (error) {
+      logger.error('Error fetching model version from CivitAI:', error);
+      throw error;
+    }
+  }
+
   // Fetch a specific model by ID
   async fetchSpecificModel(modelId: number): Promise<Model | null> {
     try {

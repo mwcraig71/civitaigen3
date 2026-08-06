@@ -2,9 +2,12 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { Loader2, PackagePlus } from "lucide-react";
 import type { Model } from "@shared/schema";
 
 interface AdminModelsPanelProps {
@@ -20,6 +23,27 @@ export default function AdminModelsPanel({ allModels }: AdminModelsPanelProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
+  const [arnInput, setArnInput] = useState("");
+  const [arnResult, setArnResult] = useState<{ name: string; arn: string } | null>(null);
+
+  const importArnMutation = useMutation({
+    mutationFn: async (arn: string) => {
+      const res = await apiRequest("POST", "/api/models/import-arn", { arn });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Import failed");
+      return data as { message: string; model: Model };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/models"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/models"] });
+      setArnResult({ name: data.model.name, arn: data.model.arn ?? arnInput });
+      setArnInput("");
+      toast({ title: "Model imported", description: data.message });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    },
+  });
 
   const updateCategoryMutation = useMutation({
     mutationFn: async ({ modelId, loraCategory }: { modelId: string; loraCategory: string | null }) => {
@@ -54,6 +78,53 @@ export default function AdminModelsPanel({ allModels }: AdminModelsPanelProps) {
 
   return (
     <div className="space-y-6">
+      {/* Import by AIR URN */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <PackagePlus className="h-5 w-5" />
+            Import Model by AIR URN
+          </CardTitle>
+          <CardDescription>
+            Add a specific model version using its full AIR URN (e.g.{" "}
+            <code className="text-xs bg-muted px-1 py-0.5 rounded">
+              urn:air:krea2:checkpoint:civitai:2762538@3187539
+            </code>
+            ). Multiple versions of the same base model can coexist.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              value={arnInput}
+              onChange={(e) => { setArnInput(e.target.value); setArnResult(null); }}
+              placeholder="urn:air:<base>:<type>:civitai:<modelId>@<versionId>"
+              className="font-mono text-xs"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && arnInput.trim() && !importArnMutation.isPending) {
+                  importArnMutation.mutate(arnInput.trim());
+                }
+              }}
+            />
+            <Button
+              onClick={() => importArnMutation.mutate(arnInput.trim())}
+              disabled={!arnInput.trim() || importArnMutation.isPending}
+            >
+              {importArnMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Import"
+              )}
+            </Button>
+          </div>
+          {arnResult && (
+            <p className="text-sm text-green-600 dark:text-green-400">
+              ✓ Imported <strong>{arnResult.name}</strong>
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* LoRA Category Management */}
       <Card>
         <CardHeader>
