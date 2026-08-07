@@ -6,3 +6,4 @@
 - [Disabling Vite HMR on Replit](vite-hmr-replit-dev.md) — hmr:false alone leaves a WS server on 24678 that fuels a reload loop; needs ws:false + client stub; 401 queries must returnNull.
 - [Replit Vite dev blank screen fix](replit-vite-cache-fix.md) — add `Cache-Control: no-store` header + `resolve.dedupe:['react','react-dom']` in vite.config.ts to fix blank screen from stale browser dep cache.
 - [Deploy run command](deploy-run-command.md) — must be `npm run start` (sets NODE_ENV=production); bare `node dist/index.js` boots Vite dev mode in prod and crash-loops health checks.
+- [ComfyUI RunPod integration](comfyui-runpod.md) — "RunPod" provider is a ComfyUI pod (port 3000), no API key, URL-only credential; config: runpod_base_url + runpod_checkpoint.

@@ -16,6 +16,7 @@ import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseOb
 import { civitaiService, CivitAIService } from "../civitai-service";
 import { diffusService, DiffusService } from "../diffus-service";
 import { RunPodService } from "../runpod-service";
+import { ComfyUIService, buildTxt2ImgWorkflow } from "../comfyui-service";
 import { resolveRunPodLoRAs } from "../runpod-lora-resolver";
 import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
@@ -820,29 +821,33 @@ function friendlyGenerationError(raw: string): string {
     // Credential check, content policy, and prompt sanitization.  These run
     // BEFORE the batch tracker is initialised.  A failure here means no pollers
     // have been started yet, so we can mark the generation failed directly.
-    let runpod: RunPodService;
+    let comfyui: ComfyUIService;
+    let checkpointName: string;
     let safePrompt: string;
     let safeNeg: string;
-    let resolvedLoRAs: Array<{ url?: string; path?: string; strength: number; name?: string }> = [];
+    // Only NV-path LoRAs are usable by ComfyUI (filename on disk in models/loras/)
+    let comfyLoRAs: Array<{ filename: string; strength: number; name?: string }> = [];
     let unresolvableLoRANames: string[] = [];
 
     try {
-      const [apiKeySetting, endpointIdSetting, nvPathSetting, mappingsSetting] = await Promise.all([
-        storage.getPlatformSetting("runpod_api_key"),
-        storage.getPlatformSetting("runpod_endpoint_id"),
+      const [baseUrlSetting, checkpointSetting, nvPathSetting, mappingsSetting] = await Promise.all([
+        storage.getPlatformSetting("runpod_base_url"),
+        storage.getPlatformSetting("runpod_checkpoint"),
         storage.getPlatformSetting("runpod_nv_base_path"),
         storage.getPlatformSetting("runpod_lora_mappings"),
       ]);
-      runpod = new RunPodService(
-        apiKeySetting?.value || undefined,
-        endpointIdSetting?.value || undefined
-      );
+      comfyui = new ComfyUIService(baseUrlSetting?.value || undefined);
 
-      if (!runpod.isAvailable()) {
-        throw new Error("RunPod API key and endpoint ID must be configured in admin settings before using RunPod.");
+      if (!comfyui.isAvailable()) {
+        throw new Error("ComfyUI base URL must be configured in admin settings before using RunPod.");
       }
 
-      // Resolve LoRAs to Network Volume paths or CivitAI download URLs
+      checkpointName = checkpointSetting?.value || "";
+      if (!checkpointName) {
+        throw new Error("ComfyUI checkpoint name must be configured in admin settings (e.g. dreamshaper_8.safetensors).");
+      }
+
+      // Resolve LoRAs — only NV-mapped ones (with a local path) work in ComfyUI
       if (generationData.loras && generationData.loras.length > 0) {
         let loraMappings: Record<string, string> = {};
         if (mappingsSetting?.value) {
@@ -853,12 +858,27 @@ function friendlyGenerationError(raw: string): string {
           nvPathSetting?.value || "",
           loraMappings
         );
-        resolvedLoRAs = resolution.resolved;
-        unresolvableLoRANames = resolution.unresolvable.map(u => u.name);
-        if (resolution.unresolvable.length > 0) {
+        // ComfyUI LoraLoader takes a filename, not a full path — strip the base dir
+        const nvBase = (nvPathSetting?.value || "").trim().replace(/\/+$/, "");
+        for (const r of resolution.resolved) {
+          if (r.path) {
+            // Extract filename relative to NV base path
+            const filename = nvBase && r.path.startsWith(nvBase + "/")
+              ? r.path.slice(nvBase.length + 1)
+              : r.path.split("/").pop() || r.path;
+            comfyLoRAs.push({ filename, strength: r.strength, name: r.name });
+          } else {
+            // URL-only resolved LoRAs can't be used by ComfyUI's LoraLoader
+            unresolvableLoRANames.push(r.name ?? "unknown");
+          }
+        }
+        for (const u of resolution.unresolvable) {
+          unresolvableLoRANames.push(u.name);
+        }
+        if (unresolvableLoRANames.length > 0) {
           logger.warn(
-            `⚠️ [RunPod] ${resolution.unresolvable.length} LoRA(s) unresolvable for generation ${generationId}: ` +
-            resolution.unresolvable.map(u => `${u.name} (${u.reason})`).join("; ")
+            `⚠️ [ComfyUI] ${unresolvableLoRANames.length} LoRA(s) cannot be applied (not in Network Volume): ` +
+            unresolvableLoRANames.join(", ")
           );
         }
       }
@@ -905,14 +925,14 @@ function friendlyGenerationError(raw: string): string {
     const baseSeed = userPinnedSeed ? generationData.seed : null;
     const seedIncrement = generationData.seedIncrement || 1000;
 
-    logger.info(`🟣 [RunPod] Starting generation ${generationId} — quantity=${quantity}, seed: ${userPinnedSeed ? `pinned(${baseSeed})` : "random"}, LoRAs: ${resolvedLoRAs.length} resolved, ${unresolvableLoRANames.length} unresolvable`);
+    logger.info(`🟣 [ComfyUI] Starting generation ${generationId} — quantity=${quantity}, checkpoint=${checkpointName}, seed: ${userPinnedSeed ? `pinned(${baseSeed})` : "random"}, LoRAs: ${comfyLoRAs.length} NV-mapped, ${unresolvableLoRANames.length} skipped`);
 
-    // Warn the user non-fatally if some LoRAs couldn't be resolved
+    // Warn the user non-fatally if some LoRAs couldn't be applied
     if (unresolvableLoRANames.length > 0) {
       broadcastToUser(userId, {
         type: "generation_warning",
         generationId,
-        warning: `${unresolvableLoRANames.length} LoRA${unresolvableLoRANames.length > 1 ? "s" : ""} couldn't be applied on RunPod — results may differ. (${unresolvableLoRANames.join(", ")})`,
+        warning: `${unresolvableLoRANames.length} LoRA${unresolvableLoRANames.length > 1 ? "s" : ""} couldn't be applied on RunPod (not found on Network Volume) — results may differ. (${unresolvableLoRANames.join(", ")})`,
       });
     }
 
@@ -923,7 +943,7 @@ function friendlyGenerationError(raw: string): string {
         ? ((baseSeed as number) + i * seedIncrement) % 2147483647
         : Math.floor(Math.random() * 2147483647);
 
-      const request = {
+      const workflowReq = {
         prompt: safePrompt,
         negativePrompt: safeNeg,
         width: generationData.width,
@@ -933,16 +953,18 @@ function friendlyGenerationError(raw: string): string {
         scheduler: generationData.scheduler || "Euler",
         clipSkip: generationData.clipSkip || 2,
         seed: imageSeed,
-        loras: resolvedLoRAs,
+        checkpointName,
+        loras: comfyLoRAs,
       };
 
       try {
-        logger.info(`🚀 [RunPod] Submitting image ${i + 1}/${quantity} (seed: ${imageSeed})`);
-        const { jobId } = await runpod.submitJob(request);
-        logger.info(`✅ [RunPod] Image ${i + 1}/${quantity} submitted — jobId: ${jobId}`);
+        logger.info(`🚀 [ComfyUI] Submitting image ${i + 1}/${quantity} (seed: ${imageSeed})`);
+        const workflow = buildTxt2ImgWorkflow(workflowReq);
+        const { promptId } = await comfyui.submitWorkflow(workflow);
+        logger.info(`✅ [ComfyUI] Image ${i + 1}/${quantity} queued — promptId: ${promptId}`);
 
         if (i === 0) {
-          await storage.updateGenerationStatus(generationId, "processing", undefined, jobId);
+          await storage.updateGenerationStatus(generationId, "processing", undefined, promptId);
           broadcastToUser(userId, {
             type: "generation_update",
             generationId,
@@ -952,14 +974,10 @@ function friendlyGenerationError(raw: string): string {
         }
 
         // Fire-and-forget; _resolveRunPodJob coordinates the final status.
-        pollRunPodJob(jobId, generationId, userId, request, imageSeed, runpod);
+        pollComfyUIJob(promptId, generationId, userId, imageSeed, comfyui);
       } catch (submitError) {
-        // Route through the batch coordinator so previous/subsequent pollers
-        // still get to complete before the generation is marked failed.
         const errMsg = submitError instanceof Error ? submitError.message : "Submission error";
-        logger.error(`❌ [RunPod] Failed to submit image ${i + 1}/${quantity}:`, submitError);
-        // _resolveRunPodJob is async but we don't await here — we want to keep
-        // submitting remaining jobs so the batch count remains accurate.
+        logger.error(`❌ [ComfyUI] Failed to submit image ${i + 1}/${quantity}:`, submitError);
         _resolveRunPodJob({ success: false, generationId, userId, errorMsg: errMsg });
       }
 
@@ -1073,6 +1091,81 @@ function friendlyGenerationError(raw: string): string {
       } catch (error) {
         logger.error(`❌ [RunPod] Polling error for ${jobId}:`, error);
         // Transient network/API error — don't clear the interval; keep trying
+      }
+    }, 3000);
+  }
+
+  /**
+   * Poll a ComfyUI prompt via GET /history/{promptId}.
+   * Uses the same _resolveRunPodJob coordinator as the Serverless poller so
+   * batch tracking works identically.
+   */
+  async function pollComfyUIJob(
+    promptId: string,
+    generationId: string,
+    userId: string,
+    seed: number,
+    comfyui: ComfyUIService
+  ) {
+    const maxAttempts = 200; // 200 × 3 s = 10 min hard cap
+    let attempts = 0;
+    const startTime = Date.now();
+    const hardTimeoutMs = 12 * 60 * 1000;
+
+    const pollInterval = setInterval(async () => {
+      attempts++;
+
+      if (Date.now() - startTime > hardTimeoutMs) {
+        clearInterval(pollInterval);
+        logger.error(`❌ [ComfyUI] Hard timeout for promptId: ${promptId}`);
+        await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: "ComfyUI generation timed out." });
+        return;
+      }
+      if (attempts > maxAttempts) {
+        clearInterval(pollInterval);
+        await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: "ComfyUI generation timed out (max polls)." });
+        return;
+      }
+
+      try {
+        const result = await comfyui.checkHistory(promptId);
+
+        if (!result.done) {
+          const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+          const progress = Math.min(90, Math.round((elapsedSec / 90) * 80) + 10);
+          broadcastToUser(userId, { type: "generation_update", generationId, status: "processing", progress });
+          return;
+        }
+
+        clearInterval(pollInterval);
+
+        if (result.error) {
+          logger.error(`❌ [ComfyUI] Prompt ${promptId} failed: ${result.error}`);
+          await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: `ComfyUI error: ${result.error}` });
+          return;
+        }
+
+        if (!result.images || result.images.length === 0) {
+          await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: "ComfyUI completed but returned no images." });
+          return;
+        }
+
+        // Use the first output image
+        const img = result.images[0];
+        const imageViewUrl = comfyui.getImageViewUrl(img.filename, img.subfolder, img.type);
+        logger.info(`✅ [ComfyUI] Prompt ${promptId} done — image URL: ${imageViewUrl}`);
+
+        const imageResult = { blobUrl: imageViewUrl, url: imageViewUrl, blobKey: undefined, seed };
+        const persisted = await processIndividualImage(imageResult, generationId, userId, {}, "runpod");
+        await _resolveRunPodJob({
+          success: persisted,
+          generationId,
+          userId,
+          errorMsg: persisted ? undefined : "ComfyUI image could not be saved. Please try again.",
+        });
+      } catch (error) {
+        logger.error(`❌ [ComfyUI] Polling error for ${promptId}:`, error);
+        // Transient error — keep trying
       }
     }, 3000);
   }

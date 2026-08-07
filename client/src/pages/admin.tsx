@@ -208,8 +208,7 @@ interface ImageProvider {
   provider: 'civitai' | 'diffus' | 'runpod';
   diffusAvailable: boolean;
   runpodAvailable: boolean;
-  runpodApiKeyConfigured: boolean;
-  runpodEndpointId: string | null;
+  runpodBaseUrl: string | null;
   setting: {
     id: string;
     key: string;
@@ -728,11 +727,10 @@ export default function AdminPage() {
   const [selectedUserForImages, setSelectedUserForImages] = useState<User | null>(null);
   const [showUserImagesDialog, setShowUserImagesDialog] = useState(false);
 
-  // RunPod config state
-  const [runpodApiKeyInput, setRunpodApiKeyInput] = useState("");
-  const [runpodEndpointIdInput, setRunpodEndpointIdInput] = useState("");
+  // RunPod / ComfyUI config state
+  const [runpodBaseUrlInput, setRunpodBaseUrlInput] = useState("");
+  const [runpodCheckpointInput, setRunpodCheckpointInput] = useState("");
   const [runpodTestResult, setRunpodTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [editingRunpodKey, setEditingRunpodKey] = useState(false);
   // RunPod LoRA config state
   const [runpodNvBasePath, setRunpodNvBasePath] = useState("");
   const [runpodLoraMappings, setRunpodLoraMappings] = useState<Record<string, string>>({});
@@ -1066,15 +1064,25 @@ export default function AdminPage() {
     },
   });
 
+  // Sync base URL + checkpoint into inputs when server data arrives
+  const { data: runpodConfigData } = useQuery<{ baseUrl: string; checkpointName: string }>({
+    queryKey: ["/api/system/runpod-config"],
+  });
+  useEffect(() => {
+    if (runpodConfigData) {
+      setRunpodBaseUrlInput(runpodConfigData.baseUrl || "");
+      setRunpodCheckpointInput(runpodConfigData.checkpointName || "");
+    }
+  }, [runpodConfigData]);
+
   const saveRunpodConfigMutation = useMutation({
-    mutationFn: (data: { apiKey: string; endpointId: string }) =>
+    mutationFn: (data: { baseUrl: string; checkpointName: string }) =>
       apiRequest('POST', '/api/system/runpod-config', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/system/image-provider"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/system/runpod-config"] });
       refetchImageProviderStatus();
-      setEditingRunpodKey(false);
-      setRunpodApiKeyInput("");
-      toast({ title: "RunPod Config Saved", description: "API key and endpoint ID updated." });
+      toast({ title: "RunPod Config Saved", description: "ComfyUI URL and checkpoint updated." });
     },
     onError: (error: any) => {
       toast({
@@ -3926,63 +3934,46 @@ export default function AdminPage() {
 
                     <div className="space-y-2">
                       <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">API Key</label>
-                        {editingRunpodKey ? (
-                          <input
-                            type="password"
-                            className="w-full text-sm border rounded px-2 py-1.5 bg-background"
-                            placeholder="rp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                            value={runpodApiKeyInput}
-                            onChange={(e) => setRunpodApiKeyInput(e.target.value)}
-                          />
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <code className="text-xs bg-muted px-2 py-1 rounded flex-1">
-                              {imageProviderStatus?.runpodApiKeyConfigured ? "••••••••••••••••••••" : "(not set)"}
-                            </code>
-                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingRunpodKey(true)}>
-                              {imageProviderStatus?.runpodApiKeyConfigured ? "Replace" : "Set key"}
-                            </Button>
-                          </div>
-                        )}
+                        <label className="text-xs text-muted-foreground mb-1 block">ComfyUI Base URL</label>
+                        <input
+                          type="text"
+                          className="w-full text-sm border rounded px-2 py-1.5 bg-background font-mono"
+                          placeholder="https://xxxxxxxxxx-3000.proxy.runpod.net"
+                          value={runpodBaseUrlInput}
+                          onChange={(e) => setRunpodBaseUrlInput(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          The full URL of your RunPod pod (port 3000, not 8188). This URL is the only credential — keep it secret.
+                        </p>
                       </div>
 
                       <div>
-                        <label className="text-xs text-muted-foreground mb-1 block">Endpoint ID</label>
+                        <label className="text-xs text-muted-foreground mb-1 block">Checkpoint Filename</label>
                         <input
                           type="text"
-                          className="w-full text-sm border rounded px-2 py-1.5 bg-background"
-                          placeholder="e.g. abc1234def5678"
-                          value={runpodEndpointIdInput || (imageProviderStatus?.runpodEndpointId ?? "")}
-                          onChange={(e) => setRunpodEndpointIdInput(e.target.value)}
+                          className="w-full text-sm border rounded px-2 py-1.5 bg-background font-mono"
+                          placeholder="e.g. dreamshaper_8.safetensors"
+                          value={runpodCheckpointInput}
+                          onChange={(e) => setRunpodCheckpointInput(e.target.value)}
                         />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Exact filename as it appears in ComfyUI's checkpoint list.
+                        </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap">
                       <Button
                         size="sm"
-                        onClick={() => {
-                          const payload: { endpointId: string; apiKey?: string } = {
-                            endpointId: runpodEndpointIdInput || imageProviderStatus?.runpodEndpointId || "",
-                          };
-                          // Only include apiKey when the admin is actively replacing it.
-                          // Sending an empty string would wipe the stored key.
-                          if (editingRunpodKey && runpodApiKeyInput.trim().length > 0) {
-                            payload.apiKey = runpodApiKeyInput.trim();
-                          }
-                          saveRunpodConfigMutation.mutate(payload as { apiKey: string; endpointId: string });
-                        }}
-                        disabled={saveRunpodConfigMutation.isPending || (!editingRunpodKey && !runpodEndpointIdInput)}
+                        onClick={() => saveRunpodConfigMutation.mutate({
+                          baseUrl: runpodBaseUrlInput.trim(),
+                          checkpointName: runpodCheckpointInput.trim(),
+                        })}
+                        disabled={saveRunpodConfigMutation.isPending || !runpodBaseUrlInput.trim()}
                       >
                         {saveRunpodConfigMutation.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : null}
                         Save Config
                       </Button>
-                      {editingRunpodKey && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditingRunpodKey(false); setRunpodApiKeyInput(""); }}>
-                          Cancel
-                        </Button>
-                      )}
                       <Button
                         size="sm"
                         variant="outline"
@@ -4164,7 +4155,7 @@ export default function AdminPage() {
                   )}
 
                   <div className="text-xs text-muted-foreground p-3 bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-800 rounded">
-                    <strong>ℹ️ Info:</strong> CivitAI is the primary provider. Diffus (requires DIFFUS_API_KEY secret) and RunPod (requires API key + endpoint ID above) can be used as alternatives. RunPod runs your own ComfyUI/diffusion endpoint — enter your RunPod Serverless endpoint ID from the RunPod dashboard.
+                    <strong>ℹ️ Info:</strong> CivitAI is the primary provider. Diffus (requires DIFFUS_API_KEY secret) and RunPod can be used as alternatives. RunPod uses a ComfyUI pod — enter its full proxy URL (port 3000). ComfyUI has no API key; the URL is the only credential so don't share it publicly. <strong>⚠️ Security:</strong> Your ComfyUI pod is publicly accessible to anyone with the URL. Consider adding HTTP Basic Auth in front before going live.
                   </div>
                 </CardContent>
               </Card>

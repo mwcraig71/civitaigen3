@@ -10,6 +10,7 @@ import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseOb
 import { civitaiService, CivitAIService } from "../civitai-service";
 import { diffusService, DiffusService } from "../diffus-service";
 import { RunPodService } from "../runpod-service";
+import { ComfyUIService } from "../comfyui-service";
 import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
@@ -184,20 +185,18 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
   // Get image provider setting (admin only)
   app.get('/api/system/image-provider', requireAdmin, async (req, res) => {
     try {
-      const [setting, apiKeySetting, endpointIdSetting] = await Promise.all([
+      const [setting, baseUrlSetting] = await Promise.all([
         storage.getPlatformSetting('image_provider'),
-        storage.getPlatformSetting('runpod_api_key'),
-        storage.getPlatformSetting('runpod_endpoint_id'),
+        storage.getPlatformSetting('runpod_base_url'),
       ]);
       const provider = setting?.value || 'civitai';
       const diffusAvailable = diffusService.isAvailable();
-      const runpodApiKey = apiKeySetting?.value || '';
-      const runpodEndpointId = endpointIdSetting?.value || '';
-      const runpodAvailable = !!(runpodApiKey && runpodEndpointId);
+      const runpodBaseUrl = baseUrlSetting?.value || '';
+      const runpodAvailable = !!runpodBaseUrl;
 
       const providerMessages: Record<string, string> = {
         diffus: 'Using Diffus API for image generation',
-        runpod: 'Using RunPod Serverless API for image generation',
+        runpod: 'Using ComfyUI (RunPod) for image generation',
         civitai: 'Using CivitAI API for image generation',
       };
 
@@ -205,9 +204,7 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
         provider,
         diffusAvailable,
         runpodAvailable,
-        // Return masked key so the admin UI can show whether it's configured
-        runpodApiKeyConfigured: runpodApiKey.length > 0,
-        runpodEndpointId: runpodEndpointId || null,
+        runpodBaseUrl: runpodBaseUrl || null,
         setting: setting || null,
         message: providerMessages[provider] ?? providerMessages.civitai,
       });
@@ -241,15 +238,12 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
         });
       }
 
-      // Guard: RunPod requires both API key and endpoint ID in platform settings
+      // Guard: RunPod requires a ComfyUI base URL
       if (provider === 'runpod') {
-        const [apiKeySetting, endpointIdSetting] = await Promise.all([
-          storage.getPlatformSetting('runpod_api_key'),
-          storage.getPlatformSetting('runpod_endpoint_id'),
-        ]);
-        if (!apiKeySetting?.value || !endpointIdSetting?.value) {
+        const baseUrlSetting = await storage.getPlatformSetting('runpod_base_url');
+        if (!baseUrlSetting?.value) {
           return res.status(400).json({
-            error: 'RunPod API key and endpoint ID must be saved before switching to RunPod.',
+            error: 'ComfyUI base URL must be saved before switching to RunPod.',
             runpodAvailable: false,
           });
         }
@@ -285,22 +279,16 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
     }
   });
 
-  // Get RunPod configuration (admin only) — key is returned masked
+  // Get RunPod / ComfyUI configuration (admin only)
   app.get('/api/system/runpod-config', requireAdmin, async (req, res) => {
     try {
-      const [apiKeySetting, endpointIdSetting] = await Promise.all([
-        storage.getPlatformSetting('runpod_api_key'),
-        storage.getPlatformSetting('runpod_endpoint_id'),
+      const [baseUrlSetting, checkpointSetting] = await Promise.all([
+        storage.getPlatformSetting('runpod_base_url'),
+        storage.getPlatformSetting('runpod_checkpoint'),
       ]);
-      const rawKey = apiKeySetting?.value || '';
-      const maskedKey = rawKey.length > 8
-        ? rawKey.slice(0, 4) + '•'.repeat(rawKey.length - 8) + rawKey.slice(-4)
-        : rawKey.length > 0 ? '•'.repeat(rawKey.length) : '';
-
       res.json({
-        apiKeyConfigured: rawKey.length > 0,
-        apiKeyMasked: maskedKey,
-        endpointId: endpointIdSetting?.value || '',
+        baseUrl: baseUrlSetting?.value || '',
+        checkpointName: checkpointSetting?.value || '',
       });
     } catch (error) {
       logger.error('Failed to get RunPod config:', error);
@@ -308,77 +296,45 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
     }
   });
 
-  // Save RunPod configuration (admin only)
+  // Save RunPod / ComfyUI configuration (admin only)
   app.post('/api/system/runpod-config', requireAdmin, async (req, res) => {
     try {
-      // apiKey is optional — omit or send empty string to leave the stored key
-      // unchanged.  endpointId is always required.
-      const { apiKey, endpointId } = req.body;
-
-      if (typeof endpointId !== 'string') {
-        return res.status(400).json({ error: 'endpointId must be a string' });
+      const { baseUrl, checkpointName } = req.body;
+      if (typeof baseUrl !== 'string') {
+        return res.status(400).json({ error: 'baseUrl must be a string' });
       }
-      if (apiKey !== undefined && typeof apiKey !== 'string') {
-        return res.status(400).json({ error: 'apiKey must be a string when provided' });
+      if (checkpointName !== undefined && typeof checkpointName !== 'string') {
+        return res.status(400).json({ error: 'checkpointName must be a string when provided' });
       }
 
       const userId = (req.user as any).claims.sub;
       const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(401).json({ error: 'User not found' });
-      }
+      if (!user) return res.status(401).json({ error: 'User not found' });
 
-      // Only persist the API key when a non-empty replacement is explicitly
-      // supplied.  An absent or empty apiKey leaves the existing value intact.
-      const newKey = typeof apiKey === 'string' ? apiKey.trim() : '';
-      const settingUpdates: Promise<any>[] = [
-        storage.updatePlatformSetting('runpod_endpoint_id', endpointId.trim(), userId, 'RunPod Serverless endpoint ID'),
-      ];
-      if (newKey.length > 0) {
-        settingUpdates.push(storage.updatePlatformSetting('runpod_api_key', newKey, userId, 'RunPod Serverless API key'));
-      }
-      await Promise.all(settingUpdates);
+      const trimmedUrl = baseUrl.trim().replace(/\/+$/, '');
+      await Promise.all([
+        storage.updatePlatformSetting('runpod_base_url', trimmedUrl, userId, 'ComfyUI base URL (RunPod pod URL, e.g. https://…-3000.proxy.runpod.net)'),
+        storage.updatePlatformSetting('runpod_checkpoint', (checkpointName ?? '').trim(), userId, 'ComfyUI checkpoint filename (e.g. dreamshaper_8.safetensors)'),
+      ]);
 
-      logger.info(`🟣 RunPod config updated by admin: ${user.username} (key ${newKey.length > 0 ? 'replaced' : 'unchanged'})`);
-
-      // For the response mask use the new key if supplied, otherwise the stored value.
-      let rawKey = newKey;
-      if (rawKey.length === 0) {
-        const existing = await storage.getPlatformSetting('runpod_api_key');
-        rawKey = existing?.value ?? '';
-      }
-      const maskedKey = rawKey.length > 8
-        ? rawKey.slice(0, 4) + '•'.repeat(rawKey.length - 8) + rawKey.slice(-4)
-        : rawKey.length > 0 ? '•'.repeat(rawKey.length) : '';
-
-      res.json({
-        success: true,
-        apiKeyConfigured: rawKey.length > 0,
-        apiKeyMasked: maskedKey,
-        endpointId: endpointId.trim(),
-      });
+      logger.info(`🟣 RunPod/ComfyUI config updated by admin: ${user.username} — URL: ${trimmedUrl}`);
+      res.json({ success: true, baseUrl: trimmedUrl, checkpointName: (checkpointName ?? '').trim() });
     } catch (error) {
       logger.error('Failed to save RunPod config:', error);
       res.status(500).json({ error: 'Failed to save RunPod config' });
     }
   });
 
-  // Test RunPod connection (admin only)
+  // Test RunPod / ComfyUI connection (admin only)
   app.post('/api/system/runpod-test', requireAdmin, async (req, res) => {
     try {
-      const [apiKeySetting, endpointIdSetting] = await Promise.all([
-        storage.getPlatformSetting('runpod_api_key'),
-        storage.getPlatformSetting('runpod_endpoint_id'),
-      ]);
-      const runpod = new RunPodService(
-        apiKeySetting?.value || undefined,
-        endpointIdSetting?.value || undefined
-      );
-      const result = await runpod.testConnection();
+      const baseUrlSetting = await storage.getPlatformSetting('runpod_base_url');
+      const comfyui = new ComfyUIService(baseUrlSetting?.value || undefined);
+      const result = await comfyui.testConnection();
       res.json(result);
     } catch (error) {
-      logger.error('Failed to test RunPod connection:', error);
-      res.status(500).json({ success: false, message: 'Internal error testing RunPod connection' });
+      logger.error('Failed to test RunPod/ComfyUI connection:', error);
+      res.status(500).json({ success: false, message: 'Internal error testing ComfyUI connection' });
     }
   });
 
