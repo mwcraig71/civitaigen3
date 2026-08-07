@@ -1248,16 +1248,12 @@ function friendlyGenerationError(raw: string): string {
       logger.info(`🔀 Using image provider: ${provider}`);
 
       if (provider === "runpod") {
-        const [apiKeySetting, endpointIdSetting] = await Promise.all([
-          storage.getPlatformSetting("runpod_api_key"),
-          storage.getPlatformSetting("runpod_endpoint_id"),
-        ]);
-        const runpodAvailable = !!(apiKeySetting?.value && endpointIdSetting?.value);
-        if (runpodAvailable) {
+        const baseUrlSetting = await storage.getPlatformSetting("runpod_base_url");
+        if (baseUrlSetting?.value) {
           await generateImageWithRunPod(generationId, userId, generationData);
           return;
         }
-        logger.warn(`⚠️ RunPod selected but credentials not configured, falling back to CivitAI`);
+        logger.warn(`⚠️ RunPod selected but ComfyUI base URL not configured, falling back to CivitAI`);
       }
 
       if (provider === "diffus" && diffusService.isAvailable()) {
