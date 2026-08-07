@@ -205,8 +205,11 @@ interface RatingFilter {
 }
 
 interface ImageProvider {
-  provider: 'civitai' | 'diffus';
+  provider: 'civitai' | 'diffus' | 'runpod';
   diffusAvailable: boolean;
+  runpodAvailable: boolean;
+  runpodApiKeyConfigured: boolean;
+  runpodEndpointId: string | null;
   setting: {
     id: string;
     key: string;
@@ -725,6 +728,12 @@ export default function AdminPage() {
   const [selectedUserForImages, setSelectedUserForImages] = useState<User | null>(null);
   const [showUserImagesDialog, setShowUserImagesDialog] = useState(false);
 
+  // RunPod config state
+  const [runpodApiKeyInput, setRunpodApiKeyInput] = useState("");
+  const [runpodEndpointIdInput, setRunpodEndpointIdInput] = useState("");
+  const [runpodTestResult, setRunpodTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [editingRunpodKey, setEditingRunpodKey] = useState(false);
+
   // External API Key management state
   const [newBotName, setNewBotName] = useState("");
   const [newBotCredits, setNewBotCredits] = useState("10000");
@@ -1028,24 +1037,56 @@ export default function AdminPage() {
   });
 
   const toggleImageProviderMutation = useMutation({
-    mutationFn: (data: { provider: 'civitai' | 'diffus' }) =>
+    mutationFn: (data: { provider: 'civitai' | 'diffus' | 'runpod' }) =>
       apiRequest('POST', '/api/system/image-provider', data),
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/system/image-provider"] });
       refetchImageProviderStatus();
+      const labels: Record<string, string> = {
+        civitai: 'Now using CivitAI for image generation',
+        diffus: 'Now using Diffus API for image generation',
+        runpod: 'Now using RunPod for image generation',
+      };
       toast({
         title: "Image Provider Updated",
-        description: imageProviderStatus?.provider === 'civitai'
-          ? "Now using Diffus API for image generation" 
-          : "Now using CivitAI API for image generation",
+        description: labels[variables.provider] ?? "Provider updated",
       });
     },
     onError: (error: any) => {
       toast({
         title: "Failed to Update Image Provider",
-        description: error.message || "Failed to toggle image provider",
+        description: error.message || "Failed to update image provider",
         variant: "destructive",
       });
+    },
+  });
+
+  const saveRunpodConfigMutation = useMutation({
+    mutationFn: (data: { apiKey: string; endpointId: string }) =>
+      apiRequest('POST', '/api/system/runpod-config', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/system/image-provider"] });
+      refetchImageProviderStatus();
+      setEditingRunpodKey(false);
+      setRunpodApiKeyInput("");
+      toast({ title: "RunPod Config Saved", description: "API key and endpoint ID updated." });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to Save RunPod Config",
+        description: error.message || "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const testRunpodConnectionMutation = useMutation({
+    mutationFn: () => apiRequest('POST', '/api/system/runpod-test', {}),
+    onSuccess: (data: any) => {
+      setRunpodTestResult({ success: data.success, message: data.message });
+    },
+    onError: (error: any) => {
+      setRunpodTestResult({ success: false, message: error.message || "Connection test failed" });
     },
   });
 
@@ -3784,59 +3825,146 @@ export default function AdminPage() {
                   <CardDescription>Select the API provider for image generation</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between p-4 border rounded-lg">
-                    <div>
-                      <h4 className="font-medium">Current Provider</h4>
-                      <p className="text-sm text-muted-foreground">
-                        {imageProviderStatus?.provider === 'diffus' 
-                          ? "Using Diffus API for image generation" 
-                          : "Using CivitAI API for image generation"
-                        }
-                      </p>
-                      {!imageProviderStatus?.diffusAvailable && (
-                        <p className="text-sm text-yellow-600 mt-1">
-                          Diffus API key not configured
-                        </p>
+                  {/* Provider selector */}
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-medium">Active Provider</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {(["civitai", "diffus", "runpod"] as const).map((p) => {
+                        const isActive = imageProviderStatus?.provider === p;
+                        const isDisabled =
+                          toggleImageProviderMutation.isPending ||
+                          (p === "diffus" && !imageProviderStatus?.diffusAvailable) ||
+                          (p === "runpod" && !imageProviderStatus?.runpodAvailable);
+                        const labels = { civitai: "CivitAI", diffus: "Diffus", runpod: "RunPod" };
+                        const dots = { civitai: "bg-blue-500", diffus: "bg-purple-500", runpod: "bg-orange-500" };
+                        return (
+                          <Button
+                            key={p}
+                            size="sm"
+                            variant={isActive ? "default" : "outline"}
+                            disabled={isDisabled}
+                            onClick={() => toggleImageProviderMutation.mutate({ provider: p })}
+                            data-testid={`button-provider-${p}`}
+                          >
+                            {toggleImageProviderMutation.isPending && isActive ? (
+                              <RefreshCw className="h-3 w-3 animate-spin mr-1" />
+                            ) : (
+                              <div className={`h-2 w-2 rounded-full ${dots[p]} mr-1.5`} />
+                            )}
+                            {labels[p]}
+                            {isActive && " ✓"}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                    {!imageProviderStatus?.diffusAvailable && (
+                      <p className="text-xs text-yellow-600">Diffus: API key not configured (add DIFFUS_API_KEY to secrets)</p>
+                    )}
+                    {!imageProviderStatus?.runpodAvailable && (
+                      <p className="text-xs text-yellow-600">RunPod: API key or endpoint ID not saved yet (configure below)</p>
+                    )}
+                  </div>
+
+                  {/* RunPod configuration */}
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-medium flex items-center gap-1.5">
+                        <div className="h-2 w-2 rounded-full bg-orange-500" />
+                        RunPod Configuration
+                      </h4>
+                      {imageProviderStatus?.runpodAvailable && (
+                        <span className="text-xs text-green-600 font-medium">● Configured</span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <div className={`h-3 w-3 rounded-full ${imageProviderStatus?.provider === 'diffus' ? 'bg-purple-500' : 'bg-blue-500'}`} />
+
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">API Key</label>
+                        {editingRunpodKey ? (
+                          <input
+                            type="password"
+                            className="w-full text-sm border rounded px-2 py-1.5 bg-background"
+                            placeholder="rp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                            value={runpodApiKeyInput}
+                            onChange={(e) => setRunpodApiKeyInput(e.target.value)}
+                          />
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <code className="text-xs bg-muted px-2 py-1 rounded flex-1">
+                              {imageProviderStatus?.runpodApiKeyConfigured ? "••••••••••••••••••••" : "(not set)"}
+                            </code>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingRunpodKey(true)}>
+                              {imageProviderStatus?.runpodApiKeyConfigured ? "Replace" : "Set key"}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Endpoint ID</label>
+                        <input
+                          type="text"
+                          className="w-full text-sm border rounded px-2 py-1.5 bg-background"
+                          placeholder="e.g. abc1234def5678"
+                          value={runpodEndpointIdInput || (imageProviderStatus?.runpodEndpointId ?? "")}
+                          onChange={(e) => setRunpodEndpointIdInput(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Button
                         size="sm"
-                        variant={imageProviderStatus?.provider === 'diffus' ? 'default' : 'outline'}
                         onClick={() => {
-                          toggleImageProviderMutation.mutate({
-                            provider: imageProviderStatus?.provider === 'civitai' ? 'diffus' : 'civitai'
-                          });
+                          const payload: { endpointId: string; apiKey?: string } = {
+                            endpointId: runpodEndpointIdInput || imageProviderStatus?.runpodEndpointId || "",
+                          };
+                          // Only include apiKey when the admin is actively replacing it.
+                          // Sending an empty string would wipe the stored key.
+                          if (editingRunpodKey && runpodApiKeyInput.trim().length > 0) {
+                            payload.apiKey = runpodApiKeyInput.trim();
+                          }
+                          saveRunpodConfigMutation.mutate(payload as { apiKey: string; endpointId: string });
                         }}
-                        disabled={toggleImageProviderMutation.isPending || (!imageProviderStatus?.diffusAvailable && imageProviderStatus?.provider === 'civitai')}
-                        data-testid="button-toggle-image-provider"
+                        disabled={saveRunpodConfigMutation.isPending || (!editingRunpodKey && !runpodEndpointIdInput)}
                       >
-                        {toggleImageProviderMutation.isPending ? (
-                          <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-                        ) : (
-                          <ImageIcon className="h-4 w-4 mr-2" />
-                        )}
-                        {imageProviderStatus?.provider === 'diffus' ? 'Switch to CivitAI' : 'Switch to Diffus'}
+                        {saveRunpodConfigMutation.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : null}
+                        Save Config
+                      </Button>
+                      {editingRunpodKey && (
+                        <Button size="sm" variant="ghost" onClick={() => { setEditingRunpodKey(false); setRunpodApiKeyInput(""); }}>
+                          Cancel
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setRunpodTestResult(null); testRunpodConnectionMutation.mutate(); }}
+                        disabled={testRunpodConnectionMutation.isPending || !imageProviderStatus?.runpodAvailable}
+                      >
+                        {testRunpodConnectionMutation.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : null}
+                        Test Connection
                       </Button>
                     </div>
+
+                    {runpodTestResult && (
+                      <div className={`text-xs p-2 rounded ${runpodTestResult.success ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300" : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"}`}>
+                        {runpodTestResult.success ? "✅" : "❌"} {runpodTestResult.message}
+                      </div>
+                    )}
                   </div>
 
                   {imageProviderStatus?.setting && (
                     <div className="text-xs text-muted-foreground p-3 bg-muted rounded">
                       <div className="flex justify-between items-start">
-                        <div>
-                          <strong>Last Updated:</strong> {format(new Date(imageProviderStatus.setting.updatedAt), 'PPp')}
-                        </div>
-                        <div>
-                          <strong>By:</strong> {imageProviderStatus.setting.updatedBy}
-                        </div>
+                        <div><strong>Last Updated:</strong> {format(new Date(imageProviderStatus.setting.updatedAt), 'PPp')}</div>
+                        <div><strong>By:</strong> {imageProviderStatus.setting.updatedBy}</div>
                       </div>
                     </div>
                   )}
-                  
+
                   <div className="text-xs text-muted-foreground p-3 bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-800 rounded">
-                    <strong>ℹ️ Info:</strong> Use this to switch between image generation APIs. CivitAI is the primary provider, but you can switch to Diffus as a backup when CivitAI is experiencing issues. Diffus requires a separate API key configured in secrets.
+                    <strong>ℹ️ Info:</strong> CivitAI is the primary provider. Diffus (requires DIFFUS_API_KEY secret) and RunPod (requires API key + endpoint ID above) can be used as alternatives. RunPod runs your own ComfyUI/diffusion endpoint — enter your RunPod Serverless endpoint ID from the RunPod dashboard.
                   </div>
                 </CardContent>
               </Card>

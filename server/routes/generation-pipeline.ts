@@ -15,6 +15,7 @@ import { storage } from "../storage";
 import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseObjectPath } from "../objectStorage";
 import { civitaiService, CivitAIService } from "../civitai-service";
 import { diffusService, DiffusService } from "../diffus-service";
+import { RunPodService } from "../runpod-service";
 import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
@@ -795,14 +796,344 @@ function friendlyGenerationError(raw: string): string {
     }, 3000); // Poll every 3 seconds (reduced from 2s to save compute)
   }
 
-  // Provider router - selects between CivitAI and Diffus based on admin setting
+  // ── RunPod image generation ─────────────────────────────────────────────────
+  //
+  // Batch coordination: each image in a quantity>1 request gets its own RunPod
+  // job and its own pollRunPodJob call.  Because a single terminal event (failed
+  // job, timeout, or bad output) must not overwrite the generation status after
+  // other jobs have already written completed images, we maintain a lightweight
+  // per-generationId counter here.  Rules:
+  //   • Only the LAST finishing poller for a generation may set the top-level
+  //     generation status.
+  //   • If at least one image succeeded, the generation is left as "completed"
+  //     regardless of how many other jobs failed.
+  //   • Only if every job fails does the generation get marked "failed".
+  const runpodBatchTracker = new Map<string, {
+    total: number;
+    succeeded: number;
+    failed: number;
+  }>();
+
+  async function generateImageWithRunPod(generationId: string, userId: string, generationData: any) {
+    // ── Phase 1: Pre-flight ──────────────────────────────────────────────────
+    // Credential check, content policy, and prompt sanitization.  These run
+    // BEFORE the batch tracker is initialised.  A failure here means no pollers
+    // have been started yet, so we can mark the generation failed directly.
+    let runpod: RunPodService;
+    let safePrompt: string;
+    let safeNeg: string;
+
+    try {
+      const [apiKeySetting, endpointIdSetting] = await Promise.all([
+        storage.getPlatformSetting("runpod_api_key"),
+        storage.getPlatformSetting("runpod_endpoint_id"),
+      ]);
+      runpod = new RunPodService(
+        apiKeySetting?.value || undefined,
+        endpointIdSetting?.value || undefined
+      );
+
+      if (!runpod.isAvailable()) {
+        throw new Error("RunPod API key and endpoint ID must be configured in admin settings before using RunPod.");
+      }
+
+      const contentCheck = civitaiService.checkForUnderageContent(generationData.prompt);
+      if (contentCheck.hasViolation) {
+        throw new Error(`Content policy violation detected. Generation blocked. Details: ${contentCheck.details.join("; ")}`);
+      }
+      safePrompt = civitaiService.sanitizePromptAges(generationData.prompt);
+      safePrompt = await civitaiService.applyPositivePromptRules(safePrompt);
+      safeNeg = civitaiService.sanitizeNegativePrompt(generationData.negativePrompt || "");
+      safeNeg = await civitaiService.applyNegativePromptRules(safeNeg);
+    } catch (preflightError) {
+      // No pollers were started; handle failure directly.
+      const rawMsg = preflightError instanceof Error ? preflightError.message : "Unknown error";
+      logger.error(`❌ [RunPod] Pre-flight failure for ${generationId}:`, preflightError);
+
+      await ErrorLogger.logGenerationError(
+        `RunPod pre-flight failed: ${rawMsg}`,
+        preflightError instanceof Error ? preflightError : new Error(rawMsg),
+        userId,
+        generationId,
+        undefined
+      ).catch(logError => { logger.error("Failed to log generation error:", logError); });
+
+      await storage.updateGenerationStatus(generationId, "failed");
+      broadcastToUser(userId, {
+        type: "generation_error",
+        generationId,
+        status: "failed",
+        error: friendlyGenerationError(rawMsg),
+      });
+      return;
+    }
+
+    // ── Phase 2: Batch submission ────────────────────────────────────────────
+    // The tracker is initialised here with the full quantity.  From this point
+    // all terminal outcomes — whether from a poller or a submission error —
+    // MUST go through _resolveRunPodJob so that partially-submitted batches are
+    // accounted for correctly.  The catch block must NOT delete the tracker or
+    // mark the generation failed directly once any pollers are running.
+    const quantity = generationData.quantity || 1;
+    const userPinnedSeed = generationData.seed !== null && generationData.seed !== undefined && generationData.seed !== -1;
+    const baseSeed = userPinnedSeed ? generationData.seed : null;
+    const seedIncrement = generationData.seedIncrement || 1000;
+
+    logger.info(`🟣 [RunPod] Starting generation ${generationId} — quantity=${quantity}, seed: ${userPinnedSeed ? `pinned(${baseSeed})` : "random"}`);
+
+    runpodBatchTracker.set(generationId, { total: quantity, succeeded: 0, failed: 0 });
+
+    for (let i = 0; i < quantity; i++) {
+      const imageSeed = userPinnedSeed
+        ? ((baseSeed as number) + i * seedIncrement) % 2147483647
+        : Math.floor(Math.random() * 2147483647);
+
+      const request = {
+        prompt: safePrompt,
+        negativePrompt: safeNeg,
+        width: generationData.width,
+        height: generationData.height,
+        steps: generationData.steps,
+        cfgScale: generationData.cfgScale / 10,
+        scheduler: generationData.scheduler || "Euler",
+        clipSkip: generationData.clipSkip || 2,
+        seed: imageSeed,
+        // LoRAs forwarded as internal IDs; endpoint honours them at its discretion.
+        // Task #90 will improve this to resolve actual download URLs.
+        loras: (generationData.loras || []).map((l: any) => ({ id: l.id, strength: l.strength })),
+      };
+
+      try {
+        logger.info(`🚀 [RunPod] Submitting image ${i + 1}/${quantity} (seed: ${imageSeed})`);
+        const { jobId } = await runpod.submitJob(request);
+        logger.info(`✅ [RunPod] Image ${i + 1}/${quantity} submitted — jobId: ${jobId}`);
+
+        if (i === 0) {
+          await storage.updateGenerationStatus(generationId, "processing", undefined, jobId);
+          broadcastToUser(userId, {
+            type: "generation_update",
+            generationId,
+            status: "processing",
+            progress: 10,
+          });
+        }
+
+        // Fire-and-forget; _resolveRunPodJob coordinates the final status.
+        pollRunPodJob(jobId, generationId, userId, request, imageSeed, runpod);
+      } catch (submitError) {
+        // Route through the batch coordinator so previous/subsequent pollers
+        // still get to complete before the generation is marked failed.
+        const errMsg = submitError instanceof Error ? submitError.message : "Submission error";
+        logger.error(`❌ [RunPod] Failed to submit image ${i + 1}/${quantity}:`, submitError);
+        // _resolveRunPodJob is async but we don't await here — we want to keep
+        // submitting remaining jobs so the batch count remains accurate.
+        _resolveRunPodJob({ success: false, generationId, userId, errorMsg: errMsg });
+      }
+
+      if (i < quantity - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+  }
+
+  // RunPod job polling — uses setInterval like the Diffus path.
+  // Terminal RunPod statuses: COMPLETED, FAILED, CANCELLED, TIMED_OUT.
+  //
+  // Each poller calls _resolveRunPodJob when it reaches a terminal state so
+  // batch coordination logic is in one place.
+  async function pollRunPodJob(
+    jobId: string,
+    generationId: string,
+    userId: string,
+    request: any,
+    seed: number,
+    runpod: RunPodService
+  ) {
+    const maxAttempts = 150; // 150 × 3 s = 7.5 min hard cap per image
+    let attempts = 0;
+    const startTime = Date.now();
+    const hardTimeoutMs = 10 * 60 * 1000; // 10-min absolute ceiling
+
+    const pollInterval = setInterval(async () => {
+      attempts++;
+
+      if (Date.now() - startTime > hardTimeoutMs) {
+        clearInterval(pollInterval);
+        logger.error(`❌ [RunPod] Hard timeout (10 min) for jobId: ${jobId}`);
+        await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: "Generation timed out waiting for RunPod." });
+        return;
+      }
+
+      if (attempts > maxAttempts) {
+        clearInterval(pollInterval);
+        logger.error(`❌ [RunPod] Max poll attempts reached for jobId: ${jobId}`);
+        await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: "Generation timed out." });
+        return;
+      }
+
+      try {
+        const result = await runpod.checkStatus(jobId);
+
+        if (result.status === "IN_QUEUE" || result.status === "IN_PROGRESS") {
+          const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+          const progress = Math.min(90, Math.round((elapsedSec / 120) * 80) + 10);
+          broadcastToUser(userId, {
+            type: "generation_update",
+            generationId,
+            status: "processing",
+            progress,
+          });
+          return; // keep polling
+        }
+
+        // ── Terminal state ──────────────────────────────────────────────────
+        clearInterval(pollInterval);
+
+        if (result.status === "COMPLETED" && result.imageUrls && result.imageUrls.length > 0) {
+          // Each RunPod job maps to exactly one image slot in the batch tracker.
+          // Use the first URL only; log a warning if the endpoint returned extras
+          // so the admin knows their endpoint is returning more than expected.
+          if (result.imageUrls.length > 1) {
+            logger.warn(
+              `⚠️ [RunPod] Job ${jobId} returned ${result.imageUrls.length} URLs — ` +
+              `using only the first. Submit one job per image (quantity > 1 is handled by the pipeline).`
+            );
+          }
+          const imageResult = {
+            blobUrl: result.imageUrls[0],
+            url: result.imageUrls[0],
+            blobKey: undefined,
+            seed: result.seed ?? seed,
+          };
+          // processIndividualImage returns false if the image was not persisted
+          // (deleted generation, race-condition skip, or DB write failure).
+          const persisted = await processIndividualImage(imageResult, generationId, userId, request, "runpod");
+          await _resolveRunPodJob({
+            success: persisted,
+            generationId,
+            userId,
+            errorMsg: persisted ? undefined : "Image could not be saved. Please try again.",
+          });
+        } else if (result.status === "COMPLETED" && result.hasBase64Images) {
+          // Endpoint returned base64 data URIs — not usable without S3/CDN
+          const msg =
+            "Your RunPod endpoint returned base64-encoded images, which cannot be " +
+            "stored directly. Configure your endpoint to upload images to an S3 bucket " +
+            "or CDN and return HTTPS URLs instead.";
+          logger.error(`❌ [RunPod] Job ${jobId}: base64 output detected — cannot use`);
+          await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: msg });
+        } else if (result.status === "COMPLETED") {
+          // Completed but no recognisable output
+          const msg =
+            "RunPod finished the job but returned no image URLs. " +
+            "Check your endpoint's output format — it must return HTTPS image URLs.";
+          logger.error(`❌ [RunPod] Job ${jobId} COMPLETED but no usable output`);
+          await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: msg });
+        } else {
+          // FAILED, CANCELLED, or TIMED_OUT
+          logger.error(`❌ [RunPod] Job ${jobId} ended with status: ${result.status} — ${result.error || ""}`);
+          const msg = result.error
+            ? `RunPod generation failed: ${result.error}`
+            : `RunPod generation ${result.status.toLowerCase()}.`;
+          await _resolveRunPodJob({ success: false, generationId, userId, errorMsg: msg });
+        }
+      } catch (error) {
+        logger.error(`❌ [RunPod] Polling error for ${jobId}:`, error);
+        // Transient network/API error — don't clear the interval; keep trying
+      }
+    }, 3000);
+  }
+
+  /**
+   * Called once per image when a RunPod poller reaches a terminal state
+   * (success or failure).  Coordinates across the N independent pollers for a
+   * single generation:
+   *   • If any image succeeded, the generation is not marked failed even if
+   *     other images in the same batch failed.
+   *   • The generation is only marked failed when ALL images in the batch have
+   *     failed and none succeeded.
+   *   • Error broadcasts are only sent by the last finishing poller (to avoid
+   *     sending multiple error events for the same generation).
+   */
+  async function _resolveRunPodJob({
+    success,
+    generationId,
+    userId,
+    errorMsg,
+  }: {
+    success: boolean;
+    generationId: string;
+    userId: string;
+    errorMsg?: string;
+  }) {
+    const batch = runpodBatchTracker.get(generationId);
+    if (!batch) {
+      // Tracker missing — poller fired after cleanup or for a deleted generation.
+      return;
+    }
+
+    if (success) {
+      batch.succeeded++;
+    } else {
+      batch.failed++;
+    }
+
+    const finished = batch.succeeded + batch.failed;
+    const isLast = finished >= batch.total;
+
+    if (isLast) {
+      runpodBatchTracker.delete(generationId);
+
+      if (batch.succeeded === 0) {
+        // Every job in the batch failed — mark the generation as failed.
+        await storage.updateGenerationStatus(generationId, "failed");
+        broadcastToUser(userId, {
+          type: "generation_error",
+          generationId,
+          status: "failed",
+          error: errorMsg || "RunPod generation failed.",
+        });
+      } else if (batch.failed > 0) {
+        // Mixed result — some images succeeded, some failed.  The generation is
+        // already "completed" from processIndividualImage; just log a warning.
+        logger.warn(
+          `⚠️ [RunPod] Batch ${generationId}: ${batch.succeeded} image(s) succeeded, ` +
+          `${batch.failed} failed — generation stays completed`
+        );
+      }
+      // If all succeeded: nothing to do — processIndividualImage already set the status.
+    } else {
+      // Not the last job — don't touch generation status.  Log partial failure.
+      if (!success) {
+        logger.warn(
+          `⚠️ [RunPod] Job failed for ${generationId} (${finished}/${batch.total} done, ` +
+          `${batch.succeeded} ok so far): ${errorMsg}`
+        );
+      }
+    }
+  }
+
+  // Provider router - selects between CivitAI, Diffus, and RunPod based on admin setting
   async function generateImageWithProvider(generationId: string, userId: string, generationData: any, userApiKey?: string) {
     try {
       const providerSetting = await storage.getPlatformSetting("image_provider");
       const provider = providerSetting?.value || "civitai";
       
       logger.info(`🔀 Using image provider: ${provider}`);
-      
+
+      if (provider === "runpod") {
+        const [apiKeySetting, endpointIdSetting] = await Promise.all([
+          storage.getPlatformSetting("runpod_api_key"),
+          storage.getPlatformSetting("runpod_endpoint_id"),
+        ]);
+        const runpodAvailable = !!(apiKeySetting?.value && endpointIdSetting?.value);
+        if (runpodAvailable) {
+          await generateImageWithRunPod(generationId, userId, generationData);
+          return;
+        }
+        logger.warn(`⚠️ RunPod selected but credentials not configured, falling back to CivitAI`);
+      }
+
       if (provider === "diffus" && diffusService.isAvailable()) {
         await generateImageWithDiffus(generationId, userId, generationData);
       } else {
@@ -951,8 +1282,11 @@ function friendlyGenerationError(raw: string): string {
   }
 
   // New function to process individual images as they become available
-  // provider: 'civitai' (blob URLs) or 'diffus' (CDN URLs with expiring tokens)
-  async function processIndividualImage(result: any, originalGenerationId: string, userId: string, requestMetadata: any, provider: 'civitai' | 'diffus' = 'civitai') {
+  // provider: 'civitai' (blob URLs), 'diffus' (CDN URLs with expiring tokens), or 'runpod' (external URL)
+  // Returns true when an image was successfully persisted to the DB and broadcast to the user.
+  // Returns false on skip (generation deleted, already completed) or on any internal error.
+  // Never throws — callers can rely on the boolean to determine whether to count this as a success.
+  async function processIndividualImage(result: any, originalGenerationId: string, userId: string, requestMetadata: any, provider: 'civitai' | 'diffus' | 'runpod' = 'civitai'): Promise<boolean> {
     try {
       // DELETION CHECK: Skip processing if the original generation was deleted
       const originalGeneration = await storage.getGeneration(originalGenerationId);
@@ -960,7 +1294,7 @@ function friendlyGenerationError(raw: string): string {
         logger.info(`🚫 Skipping image storage - generation ${originalGenerationId} was deleted`);
         // Clean up batch tracker to stop polling
         batchTracker.delete(originalGenerationId);
-        return;
+        return false;
       }
       
       // RACE CONDITION FIX: Use atomic flag from batchTracker instead of checking database
@@ -977,7 +1311,7 @@ function friendlyGenerationError(raw: string): string {
       // 2. This is NOT a batch that still needs more images (batch images should continue processing)
       if (originalGeneration.status === 'completed' && originalGeneration.imageUrl && !batchStillNeedsImages) {
         logger.info(`🔄 Skipping image - generation ${originalGenerationId} already completed with image (not a pending batch)`);
-        return;
+        return false;
       }
       
       // RECOVERY FIX: If batchTracker doesn't have this generation (server restart scenario),
@@ -1052,7 +1386,7 @@ function friendlyGenerationError(raw: string): string {
           generationId = additionalGeneration.id;
         } else {
           logger.error('Original generation not found for additional image processing');
-          return;
+          return false;
         }
       }
       
@@ -1149,10 +1483,15 @@ function friendlyGenerationError(raw: string): string {
       }).catch((err) => {
         // Catch any unhandled errors in the promise chain
         logger.error(`❌ BACKGROUND: Unhandled error for ${backgroundGenerationId}:`, err);
-      })
-      
+      });
+
+      // DB write and broadcast succeeded — report success to the caller.
+      return true;
+
     } catch (error) {
       logger.error('Error processing individual image:', error);
+      // Return false so callers (e.g. RunPod poller) know persistence failed.
+      return false;
     }
   }
 
@@ -1788,6 +2127,8 @@ export {
   generateImageWithCivitAI,
   generateImageWithDiffus,
   pollDiffusJob,
+  generateImageWithRunPod,
+  pollRunPodJob,
   generateImageWithProvider,
   processIndividualVideo,
   processIndividualImage,

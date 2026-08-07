@@ -9,6 +9,7 @@ import { storage } from "../storage";
 import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseObjectPath } from "../objectStorage";
 import { civitaiService, CivitAIService } from "../civitai-service";
 import { diffusService, DiffusService } from "../diffus-service";
+import { RunPodService } from "../runpod-service";
 import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
@@ -182,17 +183,32 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
   // Get image provider setting (admin only)
   app.get('/api/system/image-provider', requireAdmin, async (req, res) => {
     try {
-      const setting = await storage.getPlatformSetting('image_provider');
+      const [setting, apiKeySetting, endpointIdSetting] = await Promise.all([
+        storage.getPlatformSetting('image_provider'),
+        storage.getPlatformSetting('runpod_api_key'),
+        storage.getPlatformSetting('runpod_endpoint_id'),
+      ]);
       const provider = setting?.value || 'civitai';
       const diffusAvailable = diffusService.isAvailable();
-      
+      const runpodApiKey = apiKeySetting?.value || '';
+      const runpodEndpointId = endpointIdSetting?.value || '';
+      const runpodAvailable = !!(runpodApiKey && runpodEndpointId);
+
+      const providerMessages: Record<string, string> = {
+        diffus: 'Using Diffus API for image generation',
+        runpod: 'Using RunPod Serverless API for image generation',
+        civitai: 'Using CivitAI API for image generation',
+      };
+
       res.json({
         provider,
         diffusAvailable,
+        runpodAvailable,
+        // Return masked key so the admin UI can show whether it's configured
+        runpodApiKeyConfigured: runpodApiKey.length > 0,
+        runpodEndpointId: runpodEndpointId || null,
         setting: setting || null,
-        message: provider === 'diffus' 
-          ? 'Using Diffus API for image generation'
-          : 'Using CivitAI API for image generation'
+        message: providerMessages[provider] ?? providerMessages.civitai,
       });
     } catch (error) {
       logger.error('Failed to get image provider setting:', error);
@@ -200,57 +216,168 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
     }
   });
 
-  // Toggle image provider (admin only)
+  // Set image provider (admin only)
   app.post('/api/system/image-provider', requireAdmin, async (req, res) => {
     try {
       const { provider } = req.body;
-      
-      if (!['civitai', 'diffus'].includes(provider)) {
-        return res.status(400).json({ error: 'provider must be either "civitai" or "diffus"' });
+
+      if (!['civitai', 'diffus', 'runpod'].includes(provider)) {
+        return res.status(400).json({ error: 'provider must be "civitai", "diffus", or "runpod"' });
       }
-      
+
       const userId = (req.user as any).claims.sub;
       const user = await storage.getUser(userId);
-      
+
       if (!user) {
         return res.status(401).json({ error: 'User not found' });
       }
-      
-      // Check if Diffus is available when trying to switch to it
+
+      // Guard: Diffus requires an API key
       if (provider === 'diffus' && !diffusService.isAvailable()) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Diffus API key not configured. Please add DIFFUS_API_KEY to secrets.',
-          diffusAvailable: false
+          diffusAvailable: false,
         });
       }
-      
-      // Update image provider setting
+
+      // Guard: RunPod requires both API key and endpoint ID in platform settings
+      if (provider === 'runpod') {
+        const [apiKeySetting, endpointIdSetting] = await Promise.all([
+          storage.getPlatformSetting('runpod_api_key'),
+          storage.getPlatformSetting('runpod_endpoint_id'),
+        ]);
+        if (!apiKeySetting?.value || !endpointIdSetting?.value) {
+          return res.status(400).json({
+            error: 'RunPod API key and endpoint ID must be saved before switching to RunPod.',
+            runpodAvailable: false,
+          });
+        }
+      }
+
       const setting = await storage.updatePlatformSetting(
-        'image_provider', 
-        provider, 
-        userId, 
-        'Image generation API provider - civitai or diffus'
+        'image_provider',
+        provider,
+        userId,
+        'Image generation API provider - civitai, diffus, or runpod'
       );
-      
+
       logger.info(`🔀 IMAGE PROVIDER changed to ${provider.toUpperCase()} by admin: ${user.username} (${user.id})`);
-      
+
+      const providerMessages: Record<string, string> = {
+        diffus: 'Now using Diffus API for image generation',
+        runpod: 'Now using RunPod Serverless API for image generation',
+        civitai: 'Now using CivitAI API for image generation',
+      };
+
       res.json({
         success: true,
         provider,
         diffusAvailable: diffusService.isAvailable(),
         setting,
-        message: provider === 'diffus' 
-          ? 'Now using Diffus API for image generation'
-          : 'Now using CivitAI API for image generation',
-        updatedBy: {
-          id: user.id,
-          username: user.username
-        },
-        timestamp: new Date().toISOString()
+        message: providerMessages[provider] ?? providerMessages.civitai,
+        updatedBy: { id: user.id, username: user.username },
+        timestamp: new Date().toISOString(),
       });
     } catch (error) {
       logger.error('Failed to set image provider:', error);
       res.status(500).json({ error: 'Failed to set image provider' });
+    }
+  });
+
+  // Get RunPod configuration (admin only) — key is returned masked
+  app.get('/api/system/runpod-config', requireAdmin, async (req, res) => {
+    try {
+      const [apiKeySetting, endpointIdSetting] = await Promise.all([
+        storage.getPlatformSetting('runpod_api_key'),
+        storage.getPlatformSetting('runpod_endpoint_id'),
+      ]);
+      const rawKey = apiKeySetting?.value || '';
+      const maskedKey = rawKey.length > 8
+        ? rawKey.slice(0, 4) + '•'.repeat(rawKey.length - 8) + rawKey.slice(-4)
+        : rawKey.length > 0 ? '•'.repeat(rawKey.length) : '';
+
+      res.json({
+        apiKeyConfigured: rawKey.length > 0,
+        apiKeyMasked: maskedKey,
+        endpointId: endpointIdSetting?.value || '',
+      });
+    } catch (error) {
+      logger.error('Failed to get RunPod config:', error);
+      res.status(500).json({ error: 'Failed to get RunPod config' });
+    }
+  });
+
+  // Save RunPod configuration (admin only)
+  app.post('/api/system/runpod-config', requireAdmin, async (req, res) => {
+    try {
+      // apiKey is optional — omit or send empty string to leave the stored key
+      // unchanged.  endpointId is always required.
+      const { apiKey, endpointId } = req.body;
+
+      if (typeof endpointId !== 'string') {
+        return res.status(400).json({ error: 'endpointId must be a string' });
+      }
+      if (apiKey !== undefined && typeof apiKey !== 'string') {
+        return res.status(400).json({ error: 'apiKey must be a string when provided' });
+      }
+
+      const userId = (req.user as any).claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(401).json({ error: 'User not found' });
+      }
+
+      // Only persist the API key when a non-empty replacement is explicitly
+      // supplied.  An absent or empty apiKey leaves the existing value intact.
+      const newKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+      const settingUpdates: Promise<any>[] = [
+        storage.updatePlatformSetting('runpod_endpoint_id', endpointId.trim(), userId, 'RunPod Serverless endpoint ID'),
+      ];
+      if (newKey.length > 0) {
+        settingUpdates.push(storage.updatePlatformSetting('runpod_api_key', newKey, userId, 'RunPod Serverless API key'));
+      }
+      await Promise.all(settingUpdates);
+
+      logger.info(`🟣 RunPod config updated by admin: ${user.username} (key ${newKey.length > 0 ? 'replaced' : 'unchanged'})`);
+
+      // For the response mask use the new key if supplied, otherwise the stored value.
+      let rawKey = newKey;
+      if (rawKey.length === 0) {
+        const existing = await storage.getPlatformSetting('runpod_api_key');
+        rawKey = existing?.value ?? '';
+      }
+      const maskedKey = rawKey.length > 8
+        ? rawKey.slice(0, 4) + '•'.repeat(rawKey.length - 8) + rawKey.slice(-4)
+        : rawKey.length > 0 ? '•'.repeat(rawKey.length) : '';
+
+      res.json({
+        success: true,
+        apiKeyConfigured: rawKey.length > 0,
+        apiKeyMasked: maskedKey,
+        endpointId: endpointId.trim(),
+      });
+    } catch (error) {
+      logger.error('Failed to save RunPod config:', error);
+      res.status(500).json({ error: 'Failed to save RunPod config' });
+    }
+  });
+
+  // Test RunPod connection (admin only)
+  app.post('/api/system/runpod-test', requireAdmin, async (req, res) => {
+    try {
+      const [apiKeySetting, endpointIdSetting] = await Promise.all([
+        storage.getPlatformSetting('runpod_api_key'),
+        storage.getPlatformSetting('runpod_endpoint_id'),
+      ]);
+      const runpod = new RunPodService(
+        apiKeySetting?.value || undefined,
+        endpointIdSetting?.value || undefined
+      );
+      const result = await runpod.testConnection();
+      res.json(result);
+    } catch (error) {
+      logger.error('Failed to test RunPod connection:', error);
+      res.status(500).json({ success: false, message: 'Internal error testing RunPod connection' });
     }
   });
 
