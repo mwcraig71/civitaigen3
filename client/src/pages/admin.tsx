@@ -1096,7 +1096,10 @@ export default function AdminPage() {
   const testRunpodConnectionMutation = useMutation({
     mutationFn: () => apiRequest('POST', '/api/system/runpod-test', {}),
     onSuccess: (data: any) => {
-      setRunpodTestResult({ success: data.success, message: data.message });
+      setRunpodTestResult({
+        success: !!data.success,
+        message: data.message || (data.success ? "Connection successful." : "Connection failed — check the URL and make sure the pod is running."),
+      });
     },
     onError: (error: any) => {
       setRunpodTestResult({ success: false, message: error.message || "Connection test failed" });

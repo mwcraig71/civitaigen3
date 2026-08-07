@@ -331,6 +331,7 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
       const baseUrlSetting = await storage.getPlatformSetting('runpod_base_url');
       const comfyui = new ComfyUIService(baseUrlSetting?.value || undefined);
       const result = await comfyui.testConnection();
+      logger.info(`🧪 [ComfyUI] Connection test result: success=${result.success} — ${result.message}`);
       res.json(result);
     } catch (error) {
       logger.error('Failed to test RunPod/ComfyUI connection:', error);
