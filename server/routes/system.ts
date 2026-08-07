@@ -29,6 +29,7 @@ import OpenAI from "openai";
 import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
 
 import { type RouteContext, eq, and } from "./context";
+import { previewAllLoRAResolutions } from "../runpod-lora-resolver";
 
 export function registerSystemRoutes(app: Express, ctx: RouteContext) {
   // System Settings/Maintenance Mode Endpoints
@@ -378,6 +379,81 @@ export function registerSystemRoutes(app: Express, ctx: RouteContext) {
     } catch (error) {
       logger.error('Failed to test RunPod connection:', error);
       res.status(500).json({ success: false, message: 'Internal error testing RunPod connection' });
+    }
+  });
+
+  // ── RunPod LoRA config ──────────────────────────────────────────────────────
+
+  // Get RunPod LoRA configuration: NV base path + model→filename mappings
+  app.get('/api/system/runpod-lora-config', requireAdmin, async (req, res) => {
+    try {
+      const [nvPathSetting, mappingsSetting] = await Promise.all([
+        storage.getPlatformSetting('runpod_nv_base_path'),
+        storage.getPlatformSetting('runpod_lora_mappings'),
+      ]);
+      let loraMappings: Record<string, string> = {};
+      if (mappingsSetting?.value) {
+        try { loraMappings = JSON.parse(mappingsSetting.value); } catch { /* ignore corrupt JSON */ }
+      }
+      res.json({
+        nvBasePath: nvPathSetting?.value || '',
+        loraMappings,
+      });
+    } catch (error) {
+      logger.error('Failed to get RunPod LoRA config:', error);
+      res.status(500).json({ error: 'Failed to get RunPod LoRA config' });
+    }
+  });
+
+  // Save RunPod LoRA configuration
+  app.post('/api/system/runpod-lora-config', requireAdmin, async (req, res) => {
+    try {
+      const { nvBasePath, loraMappings } = req.body;
+      if (typeof nvBasePath !== 'string') {
+        return res.status(400).json({ error: 'nvBasePath must be a string' });
+      }
+      if (typeof loraMappings !== 'object' || Array.isArray(loraMappings) || loraMappings === null) {
+        return res.status(400).json({ error: 'loraMappings must be a plain object' });
+      }
+      // Validate all values are strings
+      for (const [k, v] of Object.entries(loraMappings)) {
+        if (typeof v !== 'string') {
+          return res.status(400).json({ error: `loraMappings["${k}"] must be a string filename` });
+        }
+      }
+      const userId = (req.user as any).claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(401).json({ error: 'User not found' });
+
+      await Promise.all([
+        storage.updatePlatformSetting('runpod_nv_base_path', nvBasePath.trim(), userId, 'RunPod Network Volume base path for pre-cached LoRAs'),
+        storage.updatePlatformSetting('runpod_lora_mappings', JSON.stringify(loraMappings), userId, 'RunPod LoRA model-ID to NV filename mappings (JSON)'),
+      ]);
+
+      logger.info(`🟣 RunPod LoRA config updated by admin: ${user.username}`);
+      res.json({ success: true, nvBasePath: nvBasePath.trim(), loraMappings });
+    } catch (error) {
+      logger.error('Failed to save RunPod LoRA config:', error);
+      res.status(500).json({ error: 'Failed to save RunPod LoRA config' });
+    }
+  });
+
+  // Get LoRA resolution preview — how each imported LoRA would be resolved
+  app.get('/api/system/runpod-lora-preview', requireAdmin, async (req, res) => {
+    try {
+      const [nvPathSetting, mappingsSetting] = await Promise.all([
+        storage.getPlatformSetting('runpod_nv_base_path'),
+        storage.getPlatformSetting('runpod_lora_mappings'),
+      ]);
+      let loraMappings: Record<string, string> = {};
+      if (mappingsSetting?.value) {
+        try { loraMappings = JSON.parse(mappingsSetting.value); } catch { /* ignore */ }
+      }
+      const preview = await previewAllLoRAResolutions(nvPathSetting?.value || '', loraMappings);
+      res.json({ preview });
+    } catch (error) {
+      logger.error('Failed to generate RunPod LoRA preview:', error);
+      res.status(500).json({ error: 'Failed to generate LoRA resolution preview' });
     }
   });
 

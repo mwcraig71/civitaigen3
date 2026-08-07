@@ -733,6 +733,11 @@ export default function AdminPage() {
   const [runpodEndpointIdInput, setRunpodEndpointIdInput] = useState("");
   const [runpodTestResult, setRunpodTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [editingRunpodKey, setEditingRunpodKey] = useState(false);
+  // RunPod LoRA config state
+  const [runpodNvBasePath, setRunpodNvBasePath] = useState("");
+  const [runpodLoraMappings, setRunpodLoraMappings] = useState<Record<string, string>>({});
+  const [runpodLoraMappingDraft, setRunpodLoraMappingDraft] = useState<Array<{ modelId: string; filename: string }>>([]);
+  const [showLoRAPreview, setShowLoRAPreview] = useState(false);
 
   // External API Key management state
   const [newBotName, setNewBotName] = useState("");
@@ -1087,6 +1092,48 @@ export default function AdminPage() {
     },
     onError: (error: any) => {
       setRunpodTestResult({ success: false, message: error.message || "Connection test failed" });
+    },
+  });
+
+  // ── RunPod LoRA config ──────────────────────────────────────────────────────
+  const { data: runpodLoRAConfig } = useQuery<{ nvBasePath: string; loraMappings: Record<string, string> }>({
+    queryKey: ["/api/system/runpod-lora-config"],
+    select: (data) => {
+      // Sync into local state on first load
+      return data;
+    },
+  });
+
+  // Keep local draft in sync with server data when it arrives
+  useEffect(() => {
+    if (runpodLoRAConfig) {
+      setRunpodNvBasePath(runpodLoRAConfig.nvBasePath || "");
+      const rows = Object.entries(runpodLoRAConfig.loraMappings || {}).map(([modelId, filename]) => ({ modelId, filename: filename as string }));
+      setRunpodLoraMappingDraft(rows);
+    }
+  }, [runpodLoRAConfig]);
+
+  const { data: runpodLoRAPreview, refetch: refetchLoRAPreview, isFetching: isLoRAPreviewFetching } = useQuery<{
+    preview: Array<
+      | { status: "nv_path"; modelId: string; name: string; path: string }
+      | { status: "civitai_url"; modelId: string; name: string; url: string; pinned: boolean }
+      | { status: "unresolvable"; modelId: string; name: string; reason: string }
+    >
+  }>({
+    queryKey: ["/api/system/runpod-lora-preview"],
+    enabled: showLoRAPreview,
+  });
+
+  const saveRunpodLoRAConfigMutation = useMutation({
+    mutationFn: (data: { nvBasePath: string; loraMappings: Record<string, string> }) =>
+      apiRequest('POST', '/api/system/runpod-lora-config', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/system/runpod-lora-config"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/system/runpod-lora-preview"] });
+      toast({ title: "LoRA Config Saved", description: "Network Volume path and mappings updated." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Failed to Save LoRA Config", description: error.message || "Unknown error", variant: "destructive" });
     },
   });
 
@@ -3950,6 +3997,159 @@ export default function AdminPage() {
                     {runpodTestResult && (
                       <div className={`text-xs p-2 rounded ${runpodTestResult.success ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300" : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"}`}>
                         {runpodTestResult.success ? "✅" : "❌"} {runpodTestResult.message}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RunPod LoRA Network Volume Configuration */}
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-medium flex items-center gap-1.5">
+                        <div className="h-2 w-2 rounded-full bg-orange-400" />
+                        LoRA Network Volume
+                      </h4>
+                      <span className="text-xs text-muted-foreground">Optional — pre-cached LoRAs skip download</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Network Volume Base Path</label>
+                        <input
+                          type="text"
+                          className="w-full text-sm border rounded px-2 py-1.5 bg-background font-mono"
+                          placeholder="/workspace/models/loras"
+                          value={runpodNvBasePath}
+                          onChange={(e) => setRunpodNvBasePath(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">Directory on your RunPod Network Volume where LoRA files are stored.</p>
+                      </div>
+
+                      {/* LoRA → filename mapping table */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs text-muted-foreground">LoRA → Filename Mappings</label>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 text-xs"
+                            onClick={() => setRunpodLoraMappingDraft(prev => [...prev, { modelId: "", filename: "" }])}
+                          >
+                            <Plus className="h-3 w-3 mr-1" /> Add Row
+                          </Button>
+                        </div>
+                        {runpodLoraMappingDraft.length === 0 ? (
+                          <p className="text-xs text-muted-foreground italic">No mappings — all LoRAs will use CivitAI download URLs.</p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {runpodLoraMappingDraft.map((row, idx) => (
+                              <div key={idx} className="flex gap-1.5 items-center">
+                                <input
+                                  type="text"
+                                  className="flex-1 text-xs border rounded px-2 py-1 bg-background font-mono"
+                                  placeholder="Model ID (e.g. civitai-123456)"
+                                  value={row.modelId}
+                                  onChange={(e) => {
+                                    const next = [...runpodLoraMappingDraft];
+                                    next[idx] = { ...next[idx], modelId: e.target.value };
+                                    setRunpodLoraMappingDraft(next);
+                                  }}
+                                />
+                                <span className="text-xs text-muted-foreground">→</span>
+                                <input
+                                  type="text"
+                                  className="flex-1 text-xs border rounded px-2 py-1 bg-background font-mono"
+                                  placeholder="filename.safetensors"
+                                  value={row.filename}
+                                  onChange={(e) => {
+                                    const next = [...runpodLoraMappingDraft];
+                                    next[idx] = { ...next[idx], filename: e.target.value };
+                                    setRunpodLoraMappingDraft(next);
+                                  }}
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                                  onClick={() => setRunpodLoraMappingDraft(prev => prev.filter((_, i) => i !== idx))}
+                                >
+                                  <X className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const loraMappings: Record<string, string> = {};
+                          for (const { modelId, filename } of runpodLoraMappingDraft) {
+                            if (modelId.trim() && filename.trim()) {
+                              loraMappings[modelId.trim()] = filename.trim();
+                            }
+                          }
+                          saveRunpodLoRAConfigMutation.mutate({ nvBasePath: runpodNvBasePath, loraMappings });
+                        }}
+                        disabled={saveRunpodLoRAConfigMutation.isPending}
+                      >
+                        {saveRunpodLoRAConfigMutation.isPending ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : null}
+                        Save LoRA Config
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setShowLoRAPreview(true);
+                          refetchLoRAPreview();
+                        }}
+                        disabled={isLoRAPreviewFetching}
+                      >
+                        {isLoRAPreviewFetching ? <RefreshCw className="h-3 w-3 animate-spin mr-1" /> : <Eye className="h-3 w-3 mr-1" />}
+                        Preview Resolution
+                      </Button>
+                    </div>
+
+                    {/* Resolution preview */}
+                    {showLoRAPreview && runpodLoRAPreview && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium">LoRA Resolution Preview</p>
+                          <Button size="sm" variant="ghost" className="h-5 text-xs p-1" onClick={() => setShowLoRAPreview(false)}>Hide</Button>
+                        </div>
+                        {runpodLoRAPreview.preview.length === 0 ? (
+                          <p className="text-xs text-muted-foreground italic">No LoRAs imported yet.</p>
+                        ) : (
+                          <div className="max-h-48 overflow-y-auto space-y-0.5">
+                            {runpodLoRAPreview.preview.map((entry) => (
+                              <div key={entry.modelId} className="text-xs flex items-start gap-1.5 py-0.5">
+                                {entry.status === "nv_path" && (
+                                  <>
+                                    <span className="text-green-600 shrink-0">📦</span>
+                                    <span className="font-medium truncate">{entry.name}</span>
+                                    <span className="text-muted-foreground truncate font-mono">{entry.path}</span>
+                                  </>
+                                )}
+                                {entry.status === "civitai_url" && (
+                                  <>
+                                    <span className="text-blue-500 shrink-0">🔗</span>
+                                    <span className="font-medium truncate">{entry.name}</span>
+                                    <span className="text-muted-foreground truncate">{entry.pinned ? "CivitAI (version pinned)" : "CivitAI (latest)"}</span>
+                                  </>
+                                )}
+                                {entry.status === "unresolvable" && (
+                                  <>
+                                    <span className="text-destructive shrink-0">⚠️</span>
+                                    <span className="font-medium truncate">{entry.name}</span>
+                                    <span className="text-destructive truncate">{entry.reason}</span>
+                                  </>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

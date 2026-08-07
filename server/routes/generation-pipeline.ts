@@ -16,6 +16,7 @@ import { ObjectStorageService, ObjectNotFoundError, objectStorageClient, parseOb
 import { civitaiService, CivitAIService } from "../civitai-service";
 import { diffusService, DiffusService } from "../diffus-service";
 import { RunPodService } from "../runpod-service";
+import { resolveRunPodLoRAs } from "../runpod-lora-resolver";
 import { recoveryService } from '../recovery-service';
 import { GeminiService, type AIPromptRequest } from "../gemini-service";
 import { generateSceneTitleAndDescription } from "../gemini";
@@ -822,11 +823,15 @@ function friendlyGenerationError(raw: string): string {
     let runpod: RunPodService;
     let safePrompt: string;
     let safeNeg: string;
+    let resolvedLoRAs: Array<{ url?: string; path?: string; strength: number; name?: string }> = [];
+    let unresolvableLoRANames: string[] = [];
 
     try {
-      const [apiKeySetting, endpointIdSetting] = await Promise.all([
+      const [apiKeySetting, endpointIdSetting, nvPathSetting, mappingsSetting] = await Promise.all([
         storage.getPlatformSetting("runpod_api_key"),
         storage.getPlatformSetting("runpod_endpoint_id"),
+        storage.getPlatformSetting("runpod_nv_base_path"),
+        storage.getPlatformSetting("runpod_lora_mappings"),
       ]);
       runpod = new RunPodService(
         apiKeySetting?.value || undefined,
@@ -835,6 +840,27 @@ function friendlyGenerationError(raw: string): string {
 
       if (!runpod.isAvailable()) {
         throw new Error("RunPod API key and endpoint ID must be configured in admin settings before using RunPod.");
+      }
+
+      // Resolve LoRAs to Network Volume paths or CivitAI download URLs
+      if (generationData.loras && generationData.loras.length > 0) {
+        let loraMappings: Record<string, string> = {};
+        if (mappingsSetting?.value) {
+          try { loraMappings = JSON.parse(mappingsSetting.value); } catch { /* ignore */ }
+        }
+        const resolution = await resolveRunPodLoRAs(
+          generationData.loras,
+          nvPathSetting?.value || "",
+          loraMappings
+        );
+        resolvedLoRAs = resolution.resolved;
+        unresolvableLoRANames = resolution.unresolvable.map(u => u.name);
+        if (resolution.unresolvable.length > 0) {
+          logger.warn(
+            `⚠️ [RunPod] ${resolution.unresolvable.length} LoRA(s) unresolvable for generation ${generationId}: ` +
+            resolution.unresolvable.map(u => `${u.name} (${u.reason})`).join("; ")
+          );
+        }
       }
 
       const contentCheck = civitaiService.checkForUnderageContent(generationData.prompt);
@@ -879,7 +905,16 @@ function friendlyGenerationError(raw: string): string {
     const baseSeed = userPinnedSeed ? generationData.seed : null;
     const seedIncrement = generationData.seedIncrement || 1000;
 
-    logger.info(`🟣 [RunPod] Starting generation ${generationId} — quantity=${quantity}, seed: ${userPinnedSeed ? `pinned(${baseSeed})` : "random"}`);
+    logger.info(`🟣 [RunPod] Starting generation ${generationId} — quantity=${quantity}, seed: ${userPinnedSeed ? `pinned(${baseSeed})` : "random"}, LoRAs: ${resolvedLoRAs.length} resolved, ${unresolvableLoRANames.length} unresolvable`);
+
+    // Warn the user non-fatally if some LoRAs couldn't be resolved
+    if (unresolvableLoRANames.length > 0) {
+      broadcastToUser(userId, {
+        type: "generation_warning",
+        generationId,
+        warning: `${unresolvableLoRANames.length} LoRA${unresolvableLoRANames.length > 1 ? "s" : ""} couldn't be applied on RunPod — results may differ. (${unresolvableLoRANames.join(", ")})`,
+      });
+    }
 
     runpodBatchTracker.set(generationId, { total: quantity, succeeded: 0, failed: 0 });
 
@@ -898,9 +933,7 @@ function friendlyGenerationError(raw: string): string {
         scheduler: generationData.scheduler || "Euler",
         clipSkip: generationData.clipSkip || 2,
         seed: imageSeed,
-        // LoRAs forwarded as internal IDs; endpoint honours them at its discretion.
-        // Task #90 will improve this to resolve actual download URLs.
-        loras: (generationData.loras || []).map((l: any) => ({ id: l.id, strength: l.strength })),
+        loras: resolvedLoRAs,
       };
 
       try {

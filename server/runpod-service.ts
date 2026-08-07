@@ -37,7 +37,12 @@ export interface RunPodGenerationRequest {
   scheduler?: string;
   clipSkip?: number;
   seed?: number;
-  loras?: Array<{ id: string; strength: number }>;
+  /**
+   * Resolved LoRAs — each entry carries either a Network Volume path or a
+   * CivitAI download URL (plus the human-readable model name for worker logs).
+   * Raw internal DB IDs are NOT accepted here; use resolveRunPodLoRAs() first.
+   */
+  loras?: Array<{ url?: string; path?: string; strength: number; name?: string }>;
 }
 
 export type RunPodJobStatusCode =

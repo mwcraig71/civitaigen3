@@ -1841,6 +1841,16 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
           });
         }
         // Notification removed per user request for full completion
+      } else if ((lastMessage as any).type === 'generation_warning' && lastMessage.generationId) {
+        // Non-fatal warning from the server (e.g. unresolvable LoRAs on RunPod)
+        const warningText = (lastMessage as any).warning as string | undefined;
+        if (warningText) {
+          toast({
+            title: "Generation Warning",
+            description: warningText,
+            variant: "default",
+          });
+        }
       } else if ((lastMessage as any).type === 'generation_error' && lastMessage.generationId) {
         // Generation failed - clear progress and show error
         console.log(`❌ Generation error: ${lastMessage.generationId}`);
