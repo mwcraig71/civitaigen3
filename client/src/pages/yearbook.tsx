@@ -51,6 +51,7 @@ import {
   Trash2,
   GitMerge,
   PlusCircle,
+  RotateCcw,
   X as XIcon,
 } from 'lucide-react';
 
@@ -791,6 +792,170 @@ export default function Yearbook() {
     setIsRunning(false);
     setSubmittedCount(0);
     toast({ title: 'Yearbook cancelled' });
+  };
+
+  // ── Retry failed cards ───────────────────────────────────────────────────
+  // Re-submits only the cards that currently have status "failed", leaving
+  // successful cards untouched.
+  const retryFailed = async () => {
+    const settings = form.getValues();
+    if (!settings.modelId) {
+      toast({
+        title: 'No model selected',
+        description: 'Select a model in the main generator first.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Snapshot failed cards before we start mutating state
+    const failedCards = results.filter((r) => r.status === 'failed');
+    if (!failedCards.length) return;
+
+    cancelRef.current = false;
+    setIsRunning(true);
+    setSubmittedCount(0);
+
+    // Flip all failed cards back to pending
+    setResults((prev) =>
+      prev.map((r) =>
+        r.status === 'failed'
+          ? { ...r, status: 'pending' as ResultStatus, error: undefined, imageUrl: undefined, generationId: undefined }
+          : r
+      )
+    );
+
+    type SubmitOutcome =
+      | { loraId: string; generationId: string }
+      | { loraId: string; error: string };
+
+    const submitOutcomes = await Promise.allSettled(
+      failedCards.map(async (card): Promise<SubmitOutcome> => {
+        try {
+          if (cancelRef.current) return { loraId: card.loraId, error: 'Cancelled' };
+
+          const triggerWords = card.triggerWords ?? [];
+          const fullPrompt = triggerWords.length
+            ? `${prompt.trim()}, ${triggerWords.join(', ')}`
+            : prompt.trim();
+
+          const body = {
+            modelId: settings.modelId,
+            prompt: fullPrompt,
+            negativePrompt: settings.negativePrompt ?? '',
+            seed: yearbookSeed,
+            seedIncrement: (settings as any).seedIncrement ?? 3,
+            steps: settings.steps,
+            cfgScale: settings.cfgScale,
+            width: settings.width,
+            height: settings.height,
+            scheduler: settings.scheduler,
+            clipSkip: settings.clipSkip,
+            quantity: 1,
+            loras: [{ id: card.loraId, strength: 1.0 }, ...extraLorasForGen],
+            aspectRatio: (settings as any).aspectRatio ?? '1:1',
+            creativity: (settings as any).creativity ?? 'medium',
+          };
+
+          const res = await apiRequest('POST', '/api/generations', body);
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ message: 'Failed to start generation' }));
+            return { loraId: card.loraId, error: err.message || 'Failed to start generation' };
+          }
+          const generation: Generation & { message?: string } = await res.json();
+          if (!generation.id) return { loraId: card.loraId, error: generation.message || 'No generation ID' };
+
+          setResults((prev) =>
+            prev.map((r) =>
+              r.loraId === card.loraId
+                ? { ...r, status: 'running' as ResultStatus, startedAt: Date.now(), generationId: generation.id }
+                : r
+            )
+          );
+          setSubmittedCount((c) => c + 1);
+          return { loraId: card.loraId, generationId: generation.id };
+        } catch (err: any) {
+          return { loraId: card.loraId, error: err.message ?? 'Failed to submit' };
+        }
+      })
+    );
+
+    type Submitted = { loraId: string; generationId: string };
+    const submitted: Submitted[] = [];
+
+    for (const outcome of submitOutcomes) {
+      const val = outcome.status === 'fulfilled' ? outcome.value : { loraId: '', error: 'Unknown error' };
+      if ('generationId' in val) {
+        submitted.push(val as Submitted);
+      } else {
+        const { loraId, error } = val as { loraId: string; error: string };
+        if (loraId) {
+          setResults((prev) =>
+            prev.map((r) =>
+              r.loraId === loraId && r.status === 'pending'
+                ? { ...r, status: 'failed' as ResultStatus, error }
+                : r
+            )
+          );
+        }
+      }
+    }
+
+    // Any slot still pending (cancel fired before its POST started)
+    setResults((prev) =>
+      prev.map((r) =>
+        r.status === 'pending' ? { ...r, status: 'failed' as ResultStatus, error: 'Cancelled' } : r
+      )
+    );
+
+    await Promise.all(
+      submitted.map(async ({ loraId, generationId }) => {
+        if (cancelRef.current) {
+          setResults((prev) =>
+            prev.map((r) =>
+              r.loraId === loraId && r.status === 'running'
+                ? { ...r, status: 'failed' as ResultStatus, error: 'Cancelled' }
+                : r
+            )
+          );
+          return;
+        }
+
+        const result = await waitForGeneration(generationId);
+        setResults((prev) =>
+          prev.map((r) =>
+            r.loraId === loraId
+              ? {
+                  ...r,
+                  status: (result.error ? 'failed' : 'completed') as ResultStatus,
+                  imageUrl: result.imageUrl,
+                  generationId,
+                  error: result.error,
+                  resultExtraLoras: extraLoraNames,
+                }
+              : r
+          )
+        );
+      })
+    );
+
+    setIsRunning(false);
+    setSubmittedCount(0);
+
+    setResults((prev) => {
+      try { localStorage.setItem('yearbook_results', JSON.stringify(prev)); } catch { /* ignore */ }
+      if (!cancelRef.current) {
+        const stillFailed = prev.filter((r) => r.status === 'failed').length;
+        toast({
+          title: '🔄 Retry complete!',
+          description:
+            stillFailed > 0
+              ? `${prev.filter((r) => r.status === 'completed').length} generated, ${stillFailed} still failed.`
+              : 'All retried cards completed successfully.',
+        });
+      }
+      return prev;
+    });
   };
 
   // ── Append new characters to a loaded run ────────────────────────────────
@@ -1669,6 +1834,19 @@ export default function Yearbook() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    {/* Retry failed cards */}
+                    {!isRunning && failedCount > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={retryFailed}
+                        className="h-7 gap-1.5 text-xs border-red-500/40 text-red-400 hover:text-white hover:border-red-400"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Retry {failedCount} failed
+                      </Button>
+                    )}
                     {/* Save current run */}
                     {!isRunning && completedCount > 0 && (
                       <Button
