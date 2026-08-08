@@ -1032,23 +1032,74 @@ export class CivitAIOrchestrationService {
           `⚠️ CivitAI workflow ${workflowId.substring(0, 20)} status=failed but produced ` +
           `${salvagableImages.length} image(s) — salvaging (errReason=${errReason ?? "none"})`
         );
-        // Force available:true on every salvaged image. The salvage path has already
-        // confirmed m.url is populated (the filter above). CivitAI's v2 API permanently
-        // returns available:false on FAL blobs even when their URLs are live; if we pass
-        // through that flag, the BatchPoller's isResultReady check will be false for every
-        // salvaged image and — because scheduled:false — the 30-second dead-output timer
-        // will fire before the every-10-attempts HEAD probe can override it, causing the
-        // salvaged image to be silently discarded instead of downloaded and stored.
-        return {
-          token: workflowId,
-          jobs: [{
-            jobId: workflowId,
-            cost: wf.cost || 0,
-            result: salvagableImages.map(m => ({ ...m, available: true })),
-            scheduled: false,
-            stepStatus,
-          }],
-        };
+
+        // ── Proactive HEAD probe ──────────────────────────────────────────────
+        // Krea 2 FAL blobs are served from orchestration-new.civitai.com/v2/consumer/blobs/…
+        // These are short-lived: their Cache-Control / Expires headers reveal the
+        // actual TTL. Typical observation: Cache-Control: max-age=300 (5 min) for
+        // previewUrl blobs vs. longer-lived signed CDN URLs returned on normal
+        // success paths. If the blob has already expired by the time we reach the
+        // download step (e.g. poller restart / server under load), ObjectStorageService
+        // gets a 404 and the generation silently fails. Probing here — immediately
+        // after salvage detection, usually within 1 poll cycle (~3–30 s of the
+        // failed-step event) — catches expirations before we hand the URL to the
+        // BatchPoller, and logs the TTL headers so we can document the exact window.
+        const liveImages: typeof salvagableImages = [];
+        for (const m of salvagableImages) {
+          try {
+            const probe = await fetch(m.url, { method: "HEAD", redirect: "follow" });
+            const cacheControl = probe.headers.get("cache-control") || "";
+            const expires      = probe.headers.get("expires") || "";
+            const ttlNote = cacheControl || expires || "(no cache headers — assume short-lived)";
+            if (!probe.ok) {
+              // HTTP 404 / 410 / 403 = blob is gone; do not attempt download.
+              // Any other non-2xx (e.g. 5xx) is treated as a transient failure;
+              // we skip the image conservatively rather than risk a failed download.
+              logger.warn(
+                `⚠️ Salvage HEAD probe ${probe.status} — blob already expired or inaccessible. ` +
+                `Skipping image url=${m.url.substring(0, 80)} TTL headers: ${ttlNote}`
+              );
+            } else {
+              logger.info(
+                `✅ Salvage HEAD probe OK (${probe.status}) — blob is live. ` +
+                `url=${m.url.substring(0, 80)} TTL headers: ${ttlNote}`
+              );
+              liveImages.push(m);
+            }
+          } catch (probeErr: any) {
+            // Network-level failure probing the blob URL. Skip this image: if we
+            // can't reach it here, ObjectStorageService won't be able to either.
+            logger.warn(
+              `⚠️ Salvage HEAD probe network error — skipping image url=${m.url.substring(0, 80)}: ${probeErr?.message}`
+            );
+          }
+        }
+
+        if (liveImages.length === 0) {
+          // All blobs are gone. Fall through to the normal failure path so the
+          // poller records a clean failure rather than repeatedly retrying dead URLs.
+          logger.warn(
+            `⚠️ All salvageable blobs for workflow ${workflowId.substring(0, 20)} have expired — treating as clean failure`
+          );
+        } else {
+          // Force available:true on every salvaged image. The salvage path has already
+          // confirmed m.url is populated (the filter above). CivitAI's v2 API permanently
+          // returns available:false on FAL blobs even when their URLs are live; if we pass
+          // through that flag, the BatchPoller's isResultReady check will be false for every
+          // salvaged image and — because scheduled:false — the 30-second dead-output timer
+          // will fire before the every-10-attempts HEAD probe can override it, causing the
+          // salvaged image to be silently discarded instead of downloaded and stored.
+          return {
+            token: workflowId,
+            jobs: [{
+              jobId: workflowId,
+              cost: wf.cost || 0,
+              result: liveImages.map(m => ({ ...m, available: true })),
+              scheduled: false,
+              stepStatus,
+            }],
+          };
+        }
       }
 
       // Log the full step body to aid diagnosis (trim very long blobs).
