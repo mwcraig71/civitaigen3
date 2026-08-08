@@ -277,7 +277,10 @@ export function registerAdminTrackingRoutes(app: Express, ctx: RouteContext) {
           ))::int                                                                       AS "medianTotalMs",
           ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (
             ORDER BY COALESCE(g.queue_ms, 0) + COALESCE(g.generate_ms, 0)
-          ))::int                                                                       AS "p90TotalMs"
+          ))::int                                                                       AS "p90TotalMs",
+          COUNT(*) FILTER (WHERE g.status = 'failed')                                  AS "failCount",
+          ROUND(AVG((COALESCE(g.queue_ms, 0) + COALESCE(g.generate_ms, 0))::numeric)
+            FILTER (WHERE g.status = 'failed'))::int                                   AS "avgFailMs"
         FROM generations g
         JOIN models m ON g.model_id = m.id
         WHERE g.queue_ms IS NOT NULL

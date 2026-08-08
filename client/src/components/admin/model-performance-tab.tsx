@@ -22,7 +22,7 @@ interface ModelPerf {
   modelId: string;
   modelName: string;
   baseModel: string;
-  /** Generations with timing data (only successful completions for now — see Task #52) */
+  /** Generations with timing data (successes and timed failures) */
   timedCount: number;
   count24h: number;
   medianQueueMs: number | null;
@@ -30,6 +30,10 @@ interface ModelPerf {
   medianGenerateMs: number | null;
   medianTotalMs: number | null;
   p90TotalMs: number | null;
+  /** Number of failed generations that had timing data */
+  failCount: number;
+  /** Average total latency (queue + generate) for failed generations; null when no failures */
+  avgFailMs: number | null;
 }
 
 interface HistoryPoint {
@@ -446,7 +450,7 @@ export default function ModelPerformanceTab() {
   const hasBenchmarkResults = benchmarkJobs.length > 0;
 
   // Total columns in leaderboard table (for colSpan)
-  const TABLE_COLS = 10; // #, Model, Engine, Median Queue, Median Gen, Median Total, P90 Total, 24h Runs, Total, Expand
+  const TABLE_COLS = 11; // #, Model, Engine, Median Queue, Median Gen, Median Total, P90 Total, Avg Fail, 24h Runs, Total, Expand
 
   return (
     <div className="space-y-6">
@@ -517,6 +521,9 @@ export default function ModelPerformanceTab() {
                     <th className="text-right px-4 py-2 font-medium cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("p90TotalMs")}>
                       <span className="inline-flex items-center">P90 Total<SortIcon field="p90TotalMs" /></span>
                     </th>
+                    <th className="text-right px-4 py-2 font-medium cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("avgFailMs")}>
+                      <span className="inline-flex items-center">Avg Fail<SortIcon field="avgFailMs" /></span>
+                    </th>
                     <th className="text-right px-4 py-2 font-medium">24h Runs</th>
                     <th className="text-right px-4 py-2 font-medium cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("timedCount")}>
                       <span className="inline-flex items-center">Total<SortIcon field="timedCount" /></span>
@@ -550,6 +557,15 @@ export default function ModelPerformanceTab() {
                           <td className="px-4 py-2.5 text-right tabular-nums">{fmtMs(m.medianGenerateMs)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums font-medium">{fmtMs(m.medianTotalMs)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{fmtMs(m.p90TotalMs)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums">
+                            {m.avgFailMs == null ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <span className="text-red-400" title={`${Number(m.failCount)} failed generation${Number(m.failCount) !== 1 ? "s" : ""} with timing`}>
+                                {fmtMs(m.avgFailMs)}
+                              </span>
+                            )}
+                          </td>
                           <td className="px-4 py-2.5 text-right text-muted-foreground">{Number(m.count24h)}</td>
                           <td className="px-4 py-2.5 text-right text-muted-foreground">{Number(m.timedCount)}</td>
                           <td className="px-3 py-2.5 text-muted-foreground">
