@@ -28,7 +28,7 @@ import OpenAI from "openai";
 import { apiV1Router, generateApiKey, hashApiKey, hashBotPassword, setGenerateImageHandler, setBatchTracker, setSubmitTransformHandler } from "../api-v1";
 
 import { type RouteContext, clients, eq, and, batchTracker } from "./context";
-import { BatchPoller } from "./generation-pipeline";
+import { batchPoller } from "./generation-pipeline";
 import { registerAuthUserRoutes } from "./auth-user";
 import { registerPaymentsRoutes } from "./payments";
 import { registerUsersSocialRoutes } from "./users-social";
@@ -218,9 +218,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Get user's API key directly from storage (it handles decryption)
         const userApiKey = await storage.getUserApiKey(generation.userId);
         
-        // Resume polling
+        // Resume polling — use the module-level singleton so deduplication works
+        // across all recovered generations. Creating a new BatchPoller() per
+        // generation gives each one an empty activePollers Map, defeating the
+        // token-based dedup check and spawning N concurrent pollers for a batch.
         try {
-          const batchPoller = new BatchPoller();
           const civitaiService = new CivitAIService();
 
           // v2 workflow tokens (img2img / img2vid jobs) have the shape
@@ -298,7 +300,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      logger.info('✅ Generation recovery complete');
+      logger.info(`✅ Generation recovery complete — ${batchPoller.getActiveCount()} unique token(s) polling`);
     } catch (error) {
       logger.error('❌ Error recovering stuck generations:', error);
     }
