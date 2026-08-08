@@ -207,20 +207,28 @@ export function registerAdminModerationRoutes(app: Express, ctx: RouteContext) {
   app.patch('/api/admin/models/:id', requireAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      const { loraCategory } = req.body;
+      const { loraCategory, generationAllowed } = req.body;
 
       // Validate loraCategory if provided
       if (loraCategory !== undefined && loraCategory !== null && loraCategory !== 'character' && loraCategory !== 'style') {
         return res.status(400).json({ error: 'loraCategory must be "character", "style", or null' });
       }
 
-      const updated = await storage.updateModel(id, { loraCategory: loraCategory ?? null });
+      const updates: Record<string, any> = { loraCategory: loraCategory ?? null };
+      if (generationAllowed !== undefined) {
+        if (typeof generationAllowed !== 'boolean') {
+          return res.status(400).json({ error: 'generationAllowed must be a boolean' });
+        }
+        updates.generationAllowed = generationAllowed;
+      }
+      const updated = await storage.updateModel(id, updates);
       if (!updated) {
         return res.status(404).json({ error: 'Model not found' });
       }
       // Bust the 12-hour server-side model cache so the change is visible immediately
       responseCache.invalidate('/api/models');
       responseCache.invalidate('/api/models/popular');
+      responseCache.invalidate('/api/models?generationAllowed=true');
       res.json(updated);
     } catch (error) {
       logger.error('Failed to update model:', error);

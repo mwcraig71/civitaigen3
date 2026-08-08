@@ -126,6 +126,7 @@ app.use((req, res, next) => {
   try {
     logger.info("Checking database schema...");
     await pool.query(`ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "lora_category" text`);
+    await pool.query(`ALTER TABLE "models" ADD COLUMN IF NOT EXISTS "generation_allowed" boolean DEFAULT false`);
     // Drop the base-model-level unique constraint so multiple versions of the same
     // model can coexist. Deduplication now uses the ARN (which encodes version ID).
     await pool.query(`

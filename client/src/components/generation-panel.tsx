@@ -158,6 +158,8 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
   const [denoiseStrength, setDenoiseStrength] = useState(75);
   const [useFirstImageSeedOffset, setUseFirstImageSeedOffset] = useState(false);
 
+  const { user } = useAuth();
+
   // Reward popup state for completed generations - support multiple simultaneous popups (like FipFap)
   const [activePopups, setActivePopups] = useState<Map<string, { generation: Generation; generationId: string; imageUrl: string }>>(new Map());
 
@@ -199,14 +201,28 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
       return res.json();
     },
   });
+
+  // Admins pick from their favourites list; regular users are restricted to the
+  // admin-approved generation-allowed checkpoints fetched from the server.
+  const { data: allowedCheckpoints = [], isLoading: allowedCheckpointsLoading } = useQuery<Model[]>({
+    queryKey: ['/api/models', 'generation-allowed'],
+    enabled: !user?.isAdmin,
+    staleTime: 12 * 60 * 60 * 1000,
+    refetchInterval: false,
+    queryFn: async () => {
+      const res = await fetch('/api/models?generationAllowed=true', { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
+  });
   
-  // Filter to only show favorite checkpoint models (exclude LoRAs)
+  // Picker checkpoint list: admins see their favourite checkpoints, regular users
+  // see only the generation-allowed models the admin has approved.
   const favoriteModelIds = new Set((modelFavorites as any[]).map((f: any) => f.modelId));
-  const models = allModels.filter(model => 
-    favoriteModelIds.has(model.id) && 
-    model.type?.toLowerCase() === 'checkpoint'
-  );
-  const modelsLoading = favoritesLoading || allModelsLoading;
+  const models = user?.isAdmin
+    ? allModels.filter(model => favoriteModelIds.has(model.id) && model.type?.toLowerCase() === 'checkpoint')
+    : allowedCheckpoints.filter(model => model.type?.toLowerCase() === 'checkpoint');
+  const modelsLoading = favoritesLoading || allModelsLoading || (!user?.isAdmin && allowedCheckpointsLoading);
 
   // Fetch current image provider setting (CivitAI or Diffus)
   const { data: imageProviderStatus } = useQuery<{ provider: string; diffusAvailable: boolean }>({
@@ -294,8 +310,6 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
     placeholderData: [] as SharedImage[], // Keep showing old data while fetching new
   });
 
-  const { user } = useAuth();
-  
   // WebSocket recovery callback - re-sync active generations on reconnect
   // Memoized with stable dependencies to prevent reconnection loop
   const handleWebSocketReconnect = useCallback(async () => {
@@ -3095,18 +3109,26 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                       <Button
                         type="button"
                         onClick={() => setGenerationType("img2img")}
-                        disabled={imageProviderStatus?.provider === 'runpod'}
+                        disabled={
+                          imageProviderStatus?.provider === 'runpod' ||
+                          (!user?.isAdmin && selectedModelFamily !== 'krea2')
+                        }
                         className={`px-3 py-2 text-sm font-medium rounded-lg transition-all min-w-[110px] ${
-                          imageProviderStatus?.provider === 'runpod'
+                          imageProviderStatus?.provider === 'runpod' ||
+                          (!user?.isAdmin && selectedModelFamily !== 'krea2')
                             ? "bg-slate-600 text-slate-400 cursor-not-allowed opacity-60"
                             : generationType === "img2img"
                               ? "bg-blue-600 hover:bg-blue-700 text-white"
                               : "bg-slate-700 hover:bg-slate-600 text-slate-300"
                         }`}
                         data-testid="button-img2img"
-                        title={imageProviderStatus?.provider === 'runpod'
-                          ? "Image-to-image is not supported with the RunPod provider"
-                          : "Generate using an uploaded image as the starting point (uses Flux 2 Klein regardless of selected model)"}
+                        title={
+                          imageProviderStatus?.provider === 'runpod'
+                            ? "Image-to-image is not supported with the RunPod provider"
+                            : !user?.isAdmin && selectedModelFamily !== 'krea2'
+                              ? "Image-to-image is only available with Krea 2 models"
+                              : "Generate using an uploaded image as the starting point (uses Flux 2 Klein regardless of selected model)"
+                        }
                       >
                         🖼️ Image2Image
                       </Button>

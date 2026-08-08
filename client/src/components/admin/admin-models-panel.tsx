@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Loader2, PackagePlus } from "lucide-react";
@@ -59,8 +60,26 @@ export default function AdminModelsPanel({ allModels }: AdminModelsPanelProps) {
     },
   });
 
+  const updateGenerationAllowedMutation = useMutation({
+    mutationFn: async ({ modelId, generationAllowed }: { modelId: string; generationAllowed: boolean }) => {
+      return apiRequest("PATCH", `/api/admin/models/${modelId}`, { generationAllowed });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/models"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/models"] });
+      toast({ title: "Generation access updated" });
+    },
+    onError: () => {
+      toast({ title: "Failed to update generation access", variant: "destructive" });
+    },
+  });
+
   const loraModels = (allModels ?? []).filter(
     (m) => m.type?.toLowerCase() === "lora"
+  );
+
+  const checkpointModels = (allModels ?? []).filter(
+    (m) => m.type?.toLowerCase() === "checkpoint"
   );
 
   const filtered = searchTerm.trim()
@@ -204,6 +223,74 @@ export default function AdminModelsPanel({ allModels }: AdminModelsPanelProps) {
                         <SelectItem value="style">Style</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Checkpoint Generation Access */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Generation Picker — Allowed Checkpoints</CardTitle>
+          <CardDescription>
+            Toggle which checkpoint models regular users can pick in the generation
+            panel. Admins are always unrestricted. Import a model first using the
+            AIR URN importer above, then enable it here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {checkpointModels.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">
+              No checkpoint models found. Import one above.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {checkpointModels.map((model) => {
+                const isPending =
+                  updateGenerationAllowedMutation.isPending &&
+                  (updateGenerationAllowedMutation.variables as any)?.modelId === model.id;
+                return (
+                  <div
+                    key={model.id}
+                    className="flex items-center gap-3 p-3 border rounded-lg"
+                  >
+                    {model.imageUrl ? (
+                      <img
+                        src={model.imageUrl}
+                        alt={model.name}
+                        className="w-10 h-10 object-cover rounded shrink-0"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded bg-muted shrink-0" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm truncate">{model.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {model.baseModel}
+                        {model.generationAllowed && (
+                          <Badge
+                            variant="secondary"
+                            className="ml-2 text-[10px] px-1.5 py-0 bg-green-500/20 text-green-400"
+                          >
+                            Allowed
+                          </Badge>
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                      <Switch
+                        checked={model.generationAllowed ?? false}
+                        onCheckedChange={(checked) =>
+                          updateGenerationAllowedMutation.mutate({ modelId: model.id, generationAllowed: checked })
+                        }
+                        disabled={isPending}
+                        aria-label={`Allow ${model.name} in generation picker`}
+                      />
+                    </div>
                   </div>
                 );
               })}

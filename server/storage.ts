@@ -51,6 +51,7 @@ export interface IStorage {
   getModelByCivitaiId(civitaiId: string): Promise<Model | undefined>;
   getModelByArn(arn: string): Promise<Model | undefined>;
   getAllModels(): Promise<Model[]>;
+  getGenerationAllowedModels(): Promise<Model[]>;
   getPopularModels(): Promise<Model[]>;
   createModel(model: InsertModel): Promise<Model>;
   updateModel(id: string, updates: Partial<InsertModel>): Promise<Model | undefined>;
@@ -997,6 +998,10 @@ export class DatabaseStorage implements IStorage {
 
   async getAllModels(): Promise<Model[]> {
     return await db.select().from(models);
+  }
+
+  async getGenerationAllowedModels(): Promise<Model[]> {
+    return await db.select().from(models).where(eq(models.generationAllowed, true));
   }
 
   async getPopularModels(): Promise<Model[]> {

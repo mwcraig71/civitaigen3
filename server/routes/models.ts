@@ -33,7 +33,22 @@ export function registerModelsRoutes(app: Express, ctx: RouteContext) {
   // Get all models (load from CivitAI if empty) - cached for performance
   app.get("/api/models", async (req, res) => {
     try {
-      const cacheKey = '/api/models';
+      // When ?generationAllowed=true is requested by a non-admin caller, return
+      // only models the admin has enabled for user generation.  Admins always get
+      // the full list so they can test any model in the picker.
+      const wantsGenerationAllowed = req.query.generationAllowed === "true";
+      let isAdminCaller = false;
+      if (wantsGenerationAllowed) {
+        const userId = (req.user as any)?.claims?.sub;
+        if (userId) {
+          const caller = await storage.getUser(userId);
+          isAdminCaller = caller?.isAdmin ?? false;
+        }
+      }
+
+      const cacheKey = wantsGenerationAllowed && !isAdminCaller
+        ? '/api/models?generationAllowed=true'
+        : '/api/models';
       const clientETag = req.headers['if-none-match'];
       
       // Check cache with ETag support
@@ -47,7 +62,9 @@ export function registerModelsRoutes(app: Express, ctx: RouteContext) {
         return res.json(cacheResult.data);
       }
       
-      let models = await storage.getAllModels();
+      let models = wantsGenerationAllowed && !isAdminCaller
+        ? await storage.getGenerationAllowedModels()
+        : await storage.getAllModels();
       
       // If no models in storage, fetch from CivitAI
       if (models.length === 0) {

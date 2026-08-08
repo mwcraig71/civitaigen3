@@ -110,6 +110,7 @@ export const models = pgTable("models", {
   featured: boolean("featured").default(false),
   status: text("status").default("published"), // draft, published, archived
   loraCategory: text("lora_category"), // "character" | "style" | null — admin-set canonical grouping for LoRAs
+  generationAllowed: boolean("generation_allowed").default(false), // admin-controlled: whether regular users can pick this model for generation
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
@@ -729,6 +730,7 @@ export const insertModelSchema = createInsertSchema(models).pick({
   modelVersion: true,
   arn: true,
   loraCategory: true,
+  generationAllowed: true,
 });
 
 export const insertGenerationSchema = createInsertSchema(generations).pick({

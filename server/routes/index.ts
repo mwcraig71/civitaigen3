@@ -132,6 +132,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }
 
+  // Mark admin-approved generation models. These are the only checkpoints regular
+  // users can pick in the generation panel. We search the DB by name pattern and
+  // civitaiId so the mark is applied whenever either model is imported (manually
+  // or via startup seed). If a model is not yet in the DB the admin must import
+  // it via the ARN import UI and then toggle "Generation allowed" in the admin panel.
+  try {
+    const allModels = await storage.getAllModels();
+    for (const m of allModels) {
+      const nameLower = m.name?.toLowerCase() ?? "";
+      const isApproved =
+        nameLower.includes("fineporn") ||
+        m.civitaiId === "2581228";
+      if (isApproved && !m.generationAllowed) {
+        await storage.updateModel(m.id, { generationAllowed: true } as any);
+        logger.info(`✅ Marked model "${m.name}" as generation-allowed`);
+      }
+    }
+    const allowedCount = allModels.filter(m => {
+      const n = m.name?.toLowerCase() ?? "";
+      return n.includes("fineporn") || m.civitaiId === "2581228";
+    }).length;
+    if (allowedCount === 0) {
+      logger.warn(
+        "⚠️ No generation-allowed models found in DB. Import them via the admin Models panel, then toggle 'Generation allowed'."
+      );
+    }
+  } catch (err) {
+    logger.error("⚠️ Failed to mark generation-allowed models (non-fatal):", err);
+  }
+
   // One-time backfill: copy video_url + video_thumbnail_url from generations into
   // shared_images rows that were created before the share endpoint wrote these fields.
   try {
