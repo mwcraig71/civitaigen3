@@ -405,6 +405,76 @@ function friendlyGenerationError(raw: string): string {
         getJobStatus: (t: string, k?: string) => civitaiOrchestration.getWorkflowStatus(t, k),
       };
 
+      // ── Image-to-image ───────────────────────────────────────────────────────
+      // img2img runs on Flux 2 Klein via CivitAI's `createVariant` operation
+      // regardless of the selected model — Klein is ecosystem-selected, not
+      // checkpoint-selected. The source image is a base64 data URL from the
+      // browser; submitImg2Img re-hosts it on CivitAI's blob CDN automatically.
+      if (generationData.generationType === "img2img") {
+        const sourceImageUrl: string | undefined = generationData.sourceImageUrl;
+        if (!sourceImageUrl) {
+          throw new Error("img2img requested but no sourceImageUrl provided");
+        }
+        // denoiseStrength is stored as an integer 0–100 (schema contract); divide
+        // by 100 here so submitImg2Img receives the 0–1 float it expects.
+        const denoiseStrength: number =
+          typeof generationData.denoiseStrength === "number"
+            ? Math.max(0.1, Math.min(generationData.denoiseStrength / 100, 1.0))
+            : 0.7;
+
+        logger.info(`🖼️ [img2img] Starting — quantity=${quantity}, denoise=${denoiseStrength.toFixed(2)}`);
+
+        for (let i = 0; i < quantity; i++) {
+          const imageSeed = userPinnedSeed
+            ? ((baseSeed as number) + i * seedIncrement) % 2147483647
+            : Math.floor(Math.random() * 2147483647);
+
+          const civitaiRequest = {
+            model: model.arn,
+            baseModel: model.baseModel || undefined,
+            params: {
+              prompt: safePrompt,
+              negativePrompt: safeNeg,
+              width: generationData.width,
+              height: generationData.height,
+              steps: generationData.steps,
+              cfgScale: generationData.cfgScale / 10,
+              seed: imageSeed,
+              loras: lorasWithArns,
+            },
+            generationType: "img2img" as const,
+          };
+
+          logger.info(`🚀 [img2img] Submitting image ${i + 1}/${quantity} (seed: ${imageSeed})`);
+          const submit = await civitaiOrchestration.submitImg2Img(
+            {
+              prompt: safePrompt,
+              negativePrompt: safeNeg,
+              sourceImageUrl,
+              denoiseStrength,
+              width: generationData.width,
+              height: generationData.height,
+              steps: generationData.steps,
+              cfgScale: generationData.cfgScale / 10,
+              seed: imageSeed > 0 ? imageSeed : undefined,
+              loras: lorasWithArns,
+            },
+            userApiKey,
+          );
+          logger.info(`✅ [img2img] Image ${i + 1}/${quantity} submitted — token: ${submit.token}`);
+
+          if (i === 0) {
+            await storage.updateGenerationStatus(generationId, "processing", undefined, submit.token);
+            broadcastToUser(userId, { type: "generation_update", generationId, status: "processing", progress: 10 });
+          }
+
+          pollCivitAIJob(submit.token, generationId, userId, pollerService, civitaiRequest, userApiKey);
+
+          if (i < quantity - 1) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return;
+      }
+
       // ── Batched submit (opt-in) ──────────────────────────────────────────────
       // One workflow with quantity=N instead of N workflows with quantity=1.
       // N separate workflows can land on N different Comfy workers, each of which
@@ -1248,12 +1318,28 @@ function friendlyGenerationError(raw: string): string {
       logger.info(`🔀 Using image provider: ${provider}`);
 
       if (provider === "runpod") {
+        // img2img runs on Flux 2 Klein which is a CivitAI-only operation;
+        // RunPod/ComfyUI has no equivalent. Reject before any credits are spent.
+        if (generationData.generationType === "img2img") {
+          throw new Error(
+            "Image-to-image is not supported with the RunPod provider. " +
+            "Switch the image provider to CivitAI in admin settings to use img2img."
+          );
+        }
         const baseUrlSetting = await storage.getPlatformSetting("runpod_base_url");
         if (baseUrlSetting?.value) {
           await generateImageWithRunPod(generationId, userId, generationData);
           return;
         }
         logger.warn(`⚠️ RunPod selected but ComfyUI base URL not configured, falling back to CivitAI`);
+      }
+
+      // img2img always uses Flux 2 Klein on CivitAI's orchestration API regardless
+      // of the configured provider — Diffus has no img2img equivalent.
+      if (generationData.generationType === "img2img") {
+        logger.info(`🖼️ [img2img] Routing to CivitAI (provider=${provider} ignored for img2img)`);
+        await generateImageWithCivitAI(generationId, userId, generationData, userApiKey);
+        return;
       }
 
       if (provider === "diffus" && diffusService.isAvailable()) {
@@ -1494,6 +1580,9 @@ function friendlyGenerationError(raw: string): string {
             loras: originalGeneration.loras || [],
             generationType: (originalGeneration.generationType || "txt2img") as "txt2img" | "img2img",
             denoiseStrength: originalGeneration.denoiseStrength || 75,
+            // Preserve source image metadata so multi-image img2img runs store
+            // the same origin reference on every generated record.
+            sourceImageUrl: (originalGeneration as any).sourceImageUrl || undefined,
             characterName: originalGeneration.characterName || undefined,
             sceneName: originalGeneration.sceneName || undefined,
             userId,

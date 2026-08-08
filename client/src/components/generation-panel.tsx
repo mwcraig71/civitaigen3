@@ -3082,7 +3082,7 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                     <div className="flex gap-2">
                       <Button
                         type="button"
-                        onClick={() => setGenerationType("txt2img")}
+                        onClick={() => { setGenerationType("txt2img"); setSourceImageUrl(null); }}
                         className={`px-3 py-2 text-sm font-medium rounded-lg transition-all min-w-[110px] ${
                           generationType === "txt2img" 
                             ? "bg-blue-600 hover:bg-blue-700 text-white" 
@@ -3094,10 +3094,19 @@ export default function GenerationPanel({ onImageClick }: GenerationPanelProps) 
                       </Button>
                       <Button
                         type="button"
-                        disabled={true}
-                        className="px-3 py-2 text-sm font-medium rounded-lg transition-all min-w-[110px] bg-slate-600 text-slate-400 cursor-not-allowed opacity-60"
+                        onClick={() => setGenerationType("img2img")}
+                        disabled={imageProviderStatus?.provider === 'runpod'}
+                        className={`px-3 py-2 text-sm font-medium rounded-lg transition-all min-w-[110px] ${
+                          imageProviderStatus?.provider === 'runpod'
+                            ? "bg-slate-600 text-slate-400 cursor-not-allowed opacity-60"
+                            : generationType === "img2img"
+                              ? "bg-blue-600 hover:bg-blue-700 text-white"
+                              : "bg-slate-700 hover:bg-slate-600 text-slate-300"
+                        }`}
                         data-testid="button-img2img"
-                        title="Image2Image is not currently supported by CivitAI API"
+                        title={imageProviderStatus?.provider === 'runpod'
+                          ? "Image-to-image is not supported with the RunPod provider"
+                          : "Generate using an uploaded image as the starting point (uses Flux 2 Klein regardless of selected model)"}
                       >
                         🖼️ Image2Image
                       </Button>

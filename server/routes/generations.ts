@@ -215,6 +215,21 @@ export function registerGenerationsRoutes(app: Express, ctx: RouteContext) {
           });
         }
       }
+
+      // Synchronous provider capability check — runs before record creation and
+      // credit deduction so incompatible requests are rejected with zero side effects.
+      // img2img uses Flux 2 Klein on CivitAI; RunPod/ComfyUI has no equivalent.
+      if (validatedData.generationType === "img2img") {
+        const providerSetting = await storage.getPlatformSetting("image_provider");
+        const provider = providerSetting?.value || "civitai";
+        if (provider === "runpod") {
+          return res.status(400).json({
+            message:
+              "Image-to-image is not supported with the RunPod provider. " +
+              "Switch the image provider to CivitAI in admin settings to use img2img.",
+          });
+        }
+      }
       
       // Apply age sanitization before sending to CivitAI
       const originalPrompt = validatedData.prompt;

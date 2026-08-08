@@ -260,6 +260,42 @@ export class CivitAIOrchestrationService {
   ): Promise<string> {
     const key = this.resolveKey(userApiKey);
 
+    // ── Fast-path for base64 data URLs ───────────────────────────────────────
+    // Browser file uploads arrive as `data:image/jpeg;base64,...` strings.
+    // Extract bytes directly — no HTTP fetch, no SSRF exposure.
+    if (externalUrl.startsWith("data:")) {
+      const match = externalUrl.match(/^data:(image\/[^;]+);base64,(.+)$/s);
+      if (!match) throw new Error("Invalid base64 data URL for source image");
+      const contentType = match[1];
+      const buf = Buffer.from(match[2], "base64");
+      const MAX_SOURCE_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB — mirrors browser-side limit
+      if (buf.length > MAX_SOURCE_IMAGE_BYTES) {
+        throw new Error(`Source image too large: ${(buf.length / 1024 / 1024).toFixed(1)} MB (max 10 MB)`);
+      }
+      logger.info(`📥 Source image from base64: ${buf.length} bytes, type: ${contentType}`);
+      const MAX_UPLOAD_ATTEMPTS = 3;
+      let upRes!: Response;
+      let upText = "";
+      for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+        upRes = await fetch(`${ORCHESTRATION_BASE}/v2/consumer/blobs`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": contentType },
+          body: buf,
+        });
+        upText = await upRes.text();
+        if (upRes.ok || upRes.status < 500) break;
+        logger.warn(`⚠️ CivitAI blob upload attempt ${attempt}/${MAX_UPLOAD_ATTEMPTS} → ${upRes.status}`);
+        if (attempt < MAX_UPLOAD_ATTEMPTS) await new Promise(r => setTimeout(r, 1000 * attempt));
+      }
+      if (!upRes.ok) throw new Error(`CivitAI blob upload failed ${upRes.status}: ${upText.slice(0, 200)}`);
+      let upBody: any;
+      try { upBody = JSON.parse(upText); } catch { throw new Error("Invalid JSON from CivitAI blob upload"); }
+      const blobUrl = upBody.url || (upBody.id ? `${ORCHESTRATION_BASE}/v2/consumer/blobs/${upBody.id}` : null);
+      if (!blobUrl) throw new Error("CivitAI blob upload returned no url/id");
+      logger.info(`📤 Re-hosted base64 source image on CivitAI blob: ${blobUrl}`);
+      return blobUrl;
+    }
+
     // SSRF guard: block non-HTTPS schemes and RFC-1918/loopback/link-local
     // addresses so an authenticated user cannot coerce us into proxying private
     // infrastructure. We accept any publicly-routable HTTPS hostname, enabling
